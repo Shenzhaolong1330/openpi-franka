@@ -1,0 +1,12 @@
+model:
+  checkpoint_path: /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid
+  chunk_steps: 8
+  infer_times: 50
+robot:
+  action_rate_hz: 15
+  damping: 0.067
+  ip: 192.168.1.104
+  port: 4242
+  speed: 0.01
+task:
+  prompt: pick the cube into the box

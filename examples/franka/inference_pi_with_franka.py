@@ -103,40 +103,8 @@ def get_latest_rgb():
     front_image = pil1
     return front_image, wrist_image
 
-# def get_latest_rgb():
-#     f1 = pipe_wrist.wait_for_frames()
-#     f2 = pipe_front.wait_for_frames()
-#     c1, c2 = f1.get_color_frame(), f2.get_color_frame()
-#     if not c1 or not c2: return None, None
-#     img1 = np.asanyarray(c1.get_data())  # BGR - 手腕相机图像
-#     img2 = np.asanyarray(c2.get_data())  # BGR - 前置相机图像
-    
-#     # 将图像转换为RGB格式
-#     rgb_img1 = cv2.cvtColor(img1, cv2.COLOR_BGR2RGB)  # 手腕相机RGB图像
-#     rgb_img2 = cv2.cvtColor(img2, cv2.COLOR_BGR2RGB)  # 前置相机RGB图像
-    
-#     # 创建PIL图像
-#     pil1 = Image.fromarray(rgb_img1)
-#     pil2 = Image.fromarray(rgb_img2)
-    
-#     # 生成唯一的时间戳用于文件名
-#     timestamp = time.strftime("%Y%m%d_%H%M%S")
-    
-#     # 保存图像 - 使用有意义的命名
-#     wrist_image_path = f"wrist_image_{timestamp}.png"
-#     front_image_path = f"front_image_{timestamp}.png"
-    
-#     pil1.save(front_image_path)  # 保存手腕相机图像
-#     pil2.save(wrist_image_path)  # 保存前置相机图像
-    
-#     print(f"[图像保存] 手腕相机图像已保存至: {wrist_image_path}")
-#     print(f"[图像保存] 前置相机图像已保存至: {front_image_path}")
-    
-#     wrist_image = pil2
-#     front_image = pil1
-#     return front_image, wrist_image
 
-# ========= pi0 policy =========
+# ========= pi05 policy =========
 def load_model(checkpoint_path: str):
     """
     加载 pi05 模型
@@ -396,7 +364,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--config", 
         type=str, 
-        default="config.yaml", 
+        default="examples/franka/config.yaml", 
         help="YAML configuration file path"
     )
     args = parser.parse_args()
