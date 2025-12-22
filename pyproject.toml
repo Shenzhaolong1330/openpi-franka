@@ -37,11 +37,13 @@ dependencies = [
     "transformers==4.53.2",
     "rich>=14.0.0",
     "polars>=1.30.0",
+    "pyrealsense2",
+    "zerorpc",
 ]
 
 
 [project.urls]
-Repository = "https://github.com/Physical-Intelligence/openpi"
+Repository = "https://github.com/Shenzhaolong1330/openpi-franka.git"
 
 [dependency-groups]
 dev = [
@@ -60,11 +62,19 @@ rlds = [
 ]
 
 [tool.uv]
-override-dependencies = ["ml-dtypes==0.4.1", "tensorstore==0.1.74"]
+override-dependencies = [
+    "ml-dtypes==0.4.1", 
+    "tensorstore==0.1.74",
+    "rerun-sdk>=0.24.0,<0.27.0; python_full_version < '3.13' or sys_platform != 'darwin'",
+    "rerun-sdk>=0.26.2rc2,<0.27.0; python_full_version >= '3.13' and sys_platform == 'darwin'",
+    "numpy>=1.22.4,<2.0.0"
+]
 
 [tool.uv.sources]
 openpi-client = { workspace = true }
-lerobot = { git = "https://github.com/huggingface/lerobot", rev = "0cf864870cf29f4738d3ade893e6fd13fbd7cdb5" }
+# lerobot = { git = "https://github.com/huggingface/lerobot", rev = "0cf864870cf29f4738d3ade893e6fd13fbd7cdb5" }
+# lerobot = { git = "https://github.com/huggingface/lerobot", rev = "da5d2f3e9187fa4690e6667fe8b294cae49016d6" }
+lerobot = {path = "/home/deepcybo/lerobot"}
 dlimp = { git = "https://github.com/kvablack/dlimp", rev = "ad72ce3a9b414db2185bc0b38461d4101a65477a" }
 
 [tool.uv.workspace]
