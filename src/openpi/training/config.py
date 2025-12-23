@@ -1003,7 +1003,7 @@ _CONFIGS = [
         num_train_steps=20_000,
     ),
     TrainConfig(
-        name="pi05_finetune_franka",
+        name="pi05_droid_finetune_franka",
         model=pi0_config.Pi0Config(
             pi05=True, 
             action_horizon=10, 
@@ -1011,11 +1011,11 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora"
         ),
         data=LeRobotFrankaDataConfig(
-            repo_id="-",
+            repo_id="/home/deepcybo/.cache/huggingface/lerobot/shenzhaolong/pick_cube_into_box_20251222_v01",
             base_config=DataConfig(prompt_from_task=False, action_sequence_keys=("action",)),
             extra_delta_transform=True,
         ),
-        batch_size=64,
+        batch_size=32,
         #lr_schedule=_optimizer.CosineDecaySchedule(
         #     warmup_steps=10_000,
         #     peak_lr=5e-5,
@@ -1029,7 +1029,8 @@ _CONFIGS = [
         ema_decay=None,
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         # ema_decay=0.999,
-        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        # weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid/params"),
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
         num_train_steps=30_000,
     ),
