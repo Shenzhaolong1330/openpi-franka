@@ -15,6 +15,7 @@ git submodule update --init --recursive
 ### 2. Add the dependencies you need:
 
 You can add the dependencies you need in the [pyproject.toml](pyproject.toml) `[project] dependencies` section.
+
 For me I need the following dependencies:
 ```toml
 "pyrealsense2",
@@ -22,10 +23,12 @@ For me I need the following dependencies:
 ```
 
 As for [lerobot](https://github.com/huggingface/lerobot), you can add in the `[tool.uv.sources]` section.
+
 The default version of lerobot installed by `openpi` is a very old version and the data format is not compatible with the latest version.
 So we need to install a proper version of lerobot manually.
 Here I chose the version `da5d2f3e9187fa4690e6667fe8b294cae49016d6` which is the version compatible with data collected by [lerobot_franka_isoteleop](https://github.com/Shenzhaolong1330/lerobot_franka_isoteleop.git).
-Now as I have installed the proper version of lerobot, I can add local path of lerobot in the `[tool.uv.sources]` section.
+
+As I have installed the proper version of lerobot in my computer, I can add local path of lerobot in the `[tool.uv.sources]` section.
 ```toml
 lerobot = {path = "/path/to/lerobot"}
 ```
@@ -287,4 +290,9 @@ The computed state norm is saved in the `norm_stats.json` file in the dataset di
 
 ## Finetune the Model
 
+```python
+OBS_INDICES=1,2,3,4,5,6,7,9 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_droid_finetune_franka --exp_name=pick_cube_into_box_20251222_v01 --overwrite
+```
+
 ## Inference the Model
+[inference_pi_with_franka.py](examples/franka/inference_pi_with_franka.py)
