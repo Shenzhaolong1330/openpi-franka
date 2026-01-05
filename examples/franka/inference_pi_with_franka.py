@@ -32,14 +32,14 @@ def generate_default_config(config_path: str):
         "robot": {
             "ip": "192.168.1.104",
             "port": 4242,
-            "damping": 0.067,
+            "damping": 0.005,
             "speed": 0.01,
             "action_rate_hz": 15
         },
         "model": {
             "checkpoint_path": "/home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid",
             "infer_times": 50,
-            "chunk_steps": 8
+            "chunk_steps": 10
         },
         "task": {
             "prompt": "take a tissue out and place it on the table"
@@ -113,7 +113,8 @@ def load_model(checkpoint_path: str):
     model_start_time = time.time()
     print(f"[模型加载] 检查点路径: {checkpoint_path}")
     print("[模型加载] 获取配置...")
-    cfg = openpi_config.get_config("pi05_droid")
+    # cfg = openpi_config.get_config("pi05_droid")
+    cfg = openpi_config.get_config("pi05_droid_finetune_franka")
     print("[模型加载] 创建训练策略...")
     policy = policy_config.create_trained_policy(cfg, checkpoint_path)
     model_load_time = time.time() - model_start_time
@@ -135,22 +136,23 @@ def init_franka_client(ip: str, port: int):
 # ========= Franka 控制函数 =========
 def get_franka_state(franka_client: FrankaInterfaceClient) -> np.ndarray:
     """
-    获取 Franka 机器人状态，返回 14 维状态向量
-    [gripper_position, joint1-7_positions, joint1-7_velocities]
+    获取 Franka 机器人状态，返回 8 维状态向量
+    [joint1-7_positions, gripper_position]
     """
     joint_positions = franka_client.robot_get_joint_positions()  # (7,)
     print(f"[状态获取] 当前关节位置: {joint_positions}")
-    ee_pose = franka_client.robot_get_ee_pose()
-    print(f"[状态获取] 当前末端执行器位姿: {ee_pose}")
+    # ee_pose = franka_client.robot_get_ee_pose()
+    # print(f"[状态获取] 当前末端执行器位姿: {ee_pose}")
     gripper_width = franka_client.gripper_get_state()["width"]
-    print(f"[状态获取] 当前夹爪宽度: {gripper_width}")
+    # print(f"[状态获取] 当前夹爪宽度: {gripper_width}")
     gripper_state = max(0.0, min(1.0, gripper_width/0.0801))
-    print(f"[状态获取] 当前夹爪状态: {gripper_state}")
-    # 构造 14 维状态向量
-    state14 = np.concatenate([np.array([gripper_state]), joint_positions, ee_pose])
+    gripper_position = 0.0 if gripper_state  < 0.7 else 1.0
+    print(f"[状态获取] 当前夹爪二进制状态: {gripper_position} (位置: {gripper_state})")
+    # 构造状态向量
+    state = np.concatenate([joint_positions, np.array([gripper_position])])
 
-    print(f"[状态获取] 14维状态向量: {state14}")
-    return state14
+    print(f"[状态获取] 状态向量: {state}")
+    return state
 
 def exec_franka_chunk(franka_client: FrankaInterfaceClient, actions: np.ndarray, damping: float, action_rate_hz: float) -> Dict[str, Any]:
     """
@@ -163,29 +165,18 @@ def exec_franka_chunk(franka_client: FrankaInterfaceClient, actions: np.ndarray,
         
         for i, action in enumerate(actions):
             # 计算目标关节位置（相对调整）
-            target_joints = current_joints + action[:7] * damping
+            # target_joints = current_joints + action[:7] * damping
+            target_joints = action[:7]
             
             # 执行关节位置控制
             print(f"[执行动作 {i+1}/{len(actions)}] 关节目标位置: {target_joints}")
-            # franka_client.robot_move_to_joint_positions(
-            #     positions=target_joints,
-            #     time_to_go=1.0/action_rate_hz,  # 根据动作频率计算执行时间
-            #     delta=False
-            # )
             franka_client.robot_update_desired_joint_positions(target_joints)
             print(f"[执行动作 {i+1}/{len(actions)}] 夹爪目标宽度: {action[7]*0.0801}")
             # gripper_width = action[7]*0.0801
             gripper_command = 0 if action[7] < 0.7 else 1
             franka_client.gripper_goto(width=gripper_command, speed=0.1, force=10.0)
-            # 更新当前关节位置
             current_joints = target_joints
             
-            # 控制夹爪（每几步执行一次）
-            # if i % 2 == 0:
-            #     gripper_width = max(0.0, min(0.08, action[7]))  # 夹爪宽度范围：0-0.08m
-            #     franka_client.gripper_goto(width=gripper_width, speed=0.1, force=10.0)
-            
-            # 等待下一个动作
             time.sleep(1.0/action_rate_hz)
         
         return {"ok": True, "message": "动作执行完成"}
@@ -193,13 +184,27 @@ def exec_franka_chunk(franka_client: FrankaInterfaceClient, actions: np.ndarray,
         print(f"[执行动作失败] {e}")
         return {"ok": False, "message": str(e)}
 
-def build_pi0_example(front_img: Image.Image, wrist_img: Image.Image, state14: np.ndarray, prompt: str) -> Dict[str, Any]:
+# def build_pi0_example(front_img: Image.Image, wrist_img: Image.Image, state14: np.ndarray, prompt: str) -> Dict[str, Any]:
+#     return {
+#         "observation/exterior_image_1_left": image_tools.resize_with_pad(np.array(front_img), 224, 224),
+#         "observation/wrist_image_left":      image_tools.resize_with_pad(np.array(wrist_img), 224, 224),
+#         "observation/joint_position":        state14[1:8],  # Franka 关节位置
+#         "observation/gripper_position":      state14[0],  # 夹爪位置
+#         "prompt":                            prompt,
+#     }
+
+def build_pi0_example(front_img: Image.Image, wrist_img: Image.Image, state: np.ndarray, prompt: str) -> Dict[str, Any]:
+    # 将关节位置和夹爪位置合并为8维状态向量
+    state = np.concatenate([
+        state[0:7],   # 关节位置
+        [state[7]]    # 夹爪状态
+    ])
+    
     return {
-        "observation/exterior_image_1_left": image_tools.resize_with_pad(np.array(front_img), 224, 224),
-        "observation/wrist_image_left":      image_tools.resize_with_pad(np.array(wrist_img), 224, 224),
-        "observation/joint_position":        state14[1:8],  # Franka 关节位置
-        "observation/gripper_position":      state14[0],  # 夹爪位置
-        "prompt":                            prompt,
+        "observation/image": image_tools.resize_with_pad(np.array(front_img), 224, 224),
+        "observation/wrist_image": image_tools.resize_with_pad(np.array(wrist_img), 224, 224),
+        "observation/state": state,  # 8维状态向量
+        "prompt": prompt,
     }
 
 def stream_closed_loop_chunks(
@@ -236,7 +241,7 @@ def stream_closed_loop_chunks(
         # 2) 取状态
         state_time = time.time()
         try:
-            state14 = get_franka_state(franka_client)
+            state = get_franka_state(franka_client)
             print(f"[推理步骤 {success+1}/{infer_times}] 状态获取完成，耗时: {time.time() - state_time:.2f}秒")
         except Exception as e:
             timeouts += 1
@@ -245,7 +250,7 @@ def stream_closed_loop_chunks(
 
         # 3) 推理 → 取前 n 步
         inference_time = time.time()
-        example = build_pi0_example(front_img, wrist_img, state14, prompt)
+        example = build_pi0_example(front_img, wrist_img, state, prompt)
         print(f"[推理步骤 {success+1}/{infer_times}] 准备推理输入...")
         act_chunk = policy.infer(example)["actions"]          # (H,8)
         inference_duration = time.time() - inference_time

@@ -48,6 +48,15 @@ and install the dependencies in the conda environment:
 ```bash
 GIT_LFS_SKIP_SMUDGE=1 uv sync
 GIT_LFS_SKIP_SMUDGE=1 uv pip install -e .
+# If above command failed, try the following command:
+# GIT_LFS_SKIP_SMUDGE=1 UV_HTTP_TIMEOUT=300 uv pip install -e . --index-url https://mirrors.aliyun.com/pypi/simple/
+```
+
+Install packages needed: 
+```bash
+apt update && apt upgrade -y
+apt install -y ffmpeg libavutil-dev libavcodec-dev libavformat-dev
+ffmpeg -version
 ```
 
 ## Config Franka Policy
@@ -289,6 +298,8 @@ OBS_INDICES=1,2,3,4,5,6,7,9 uv run scripts/compute_norm_stats.py --config-name p
 The computed state norm is saved in the `norm_stats.json` file in the dataset directory.
 
 ## Finetune the Model
+
+I collected 50 training trajectories for finetuning the model.
 
 ```python
 OBS_INDICES=1,2,3,4,5,6,7,9 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_droid_finetune_franka --exp_name=pick_cube_into_box_20251222_v01 --overwrite
