@@ -1,378 +1,311 @@
-#!/usr/bin/env python3
-import os, time, uuid, yaml
-from typing import Dict, Any, List
-
-import cv2
+import logging
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+import yaml
+import os
+import time
+import threading
 import numpy as np
-import pyrealsense2 as rs
-from PIL import Image
-
-from openpi.training import config as openpi_config
-from openpi.policies import policy_config
+from pathlib import Path
+from typing import Dict, Any
+from utils import FpsCounter
 from openpi_client import image_tools
+from recorder_ur import Recorder 
+from openpi.training import config as _config
+from openpi.policies import policy_config as _policy_config
+from lerobot.cameras.configs import ColorMode, Cv2Rotation
+from lerobot.cameras.realsense.camera_realsense import RealSenseCameraConfig
+from lerobot.cameras import make_cameras_from_configs
 from franka_interface_client import FrankaInterfaceClient
 
-# ========= YAML 配置文件读取 =========
-def load_config(config_path: str) -> Dict[str, Any]:
+home = Path.home()
+
+def update_latest_symlink(target: Path, link_name: Path):
     """
-    加载 YAML 配置文件
+    这个函数在机器人推理系统中用于维护一个"最新日志"的快捷方式，
+    方便用户快速访问当前会话的日志信息。
     """
-    print(f"[配置加载] 读取配置文件: {config_path}")
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
-    print(f"[配置加载] 配置读取完成")
-    return config
+    if link_name.exists() or link_name.is_symlink():
+        link_name.unlink()
+    os.symlink(target, link_name)
 
-# 生成默认配置文件
-def generate_default_config(config_path: str):
-    """
-    生成默认配置文件
-    """
-    default_config = {
-        "robot": {
-            "ip": "192.168.1.104",
-            "port": 4242,
-            "damping": 0.005,
-            "speed": 0.01,
-            "action_rate_hz": 15
-        },
-        "model": {
-            "checkpoint_path": "/home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid",
-            "infer_times": 50,
-            "chunk_steps": 10
-        },
-        "task": {
-            "prompt": "take a tissue out and place it on the table"
-        }
-    }
-    
-    print(f"[配置生成] 创建默认配置文件: {config_path}")
-    with open(config_path, 'w', encoding='utf-8') as f:
-        yaml.dump(default_config, f, default_flow_style=False, allow_unicode=True)
-    print(f"[配置生成] 默认配置文件已创建")
-    return default_config
+class Inference:
+    def __init__(self, config_path: Path):
+        # Load YAML config
+        with open(config_path, "r") as f:
+            cfg = yaml.safe_load(f)
 
-print("[初始化] 开始系统组件初始化...")
-start_time = time.time()
-
-# ========= RealSense =========
-def start_pipeline(serial: str):
-    print(f"[相机初始化] 启动相机 {serial}...")
-    pipeline = rs.pipeline()
-    cfg = rs.config()
-    cfg.enable_device(serial)
-    cfg.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-    pipeline.start(cfg)
-    print(f"[相机初始化] 相机 {serial} 启动成功")
-    return pipeline
-
-# 初始化两台相机（wrist/front）
-print("[相机初始化] 开始初始化 RealSense 相机...")
-ctx = rs.context()
-devices = list(ctx.query_devices())
-if len(devices) < 2:
-    raise RuntimeError(f"需要至少 2 台 RealSense D455，相机发现数={len(devices)}")
-print(f"[相机初始化] 发现 {len(devices)} 台 RealSense 设备")
-serials = [d.get_info(rs.camera_info.serial_number) for d in devices[:2]]
-print(f"[相机初始化] 选择相机: {serials[0]} (wrist), {serials[1]} (front)")
-
-# 初始化手腕相机
-print("[相机初始化] 初始化手腕相机...")
-pipeline_start_time = time.time()
-pipe_wrist = start_pipeline(serials[0])
-print(f"[相机初始化] 手腕相机初始化完成，耗时: {time.time() - pipeline_start_time:.2f}秒")
-
-# 初始化前置相机
-print("[相机初始化] 初始化前置相机...")
-pipeline_start_time = time.time()
-pipe_front = start_pipeline(serials[1])
-print(f"[相机初始化] 前置相机初始化完成，耗时: {time.time() - pipeline_start_time:.2f}秒")
-
-print("[相机初始化] 所有相机初始化成功")
-
-def get_latest_rgb():
-    f1 = pipe_wrist.wait_for_frames()
-    f2 = pipe_front.wait_for_frames()
-    c1, c2 = f1.get_color_frame(), f2.get_color_frame()
-    if not c1 or not c2: return None, None
-    img1 = np.asanyarray(c1.get_data())  # BGR
-    img2 = np.asanyarray(c2.get_data())
-    pil1 = Image.fromarray(cv2.cvtColor(img1, cv2.COLOR_BGR2RGB))
-    pil2 = Image.fromarray(cv2.cvtColor(img2, cv2.COLOR_BGR2RGB))
-    wrist_image = pil2
-    front_image = pil1
-    return front_image, wrist_image
-
-
-# ========= pi05 policy =========
-def load_model(checkpoint_path: str):
-    """
-    加载 pi05 模型
-    """
-    print("[模型加载] 开始加载模型...")
-    model_start_time = time.time()
-    print(f"[模型加载] 检查点路径: {checkpoint_path}")
-    print("[模型加载] 获取配置...")
-    # cfg = openpi_config.get_config("pi05_droid")
-    cfg = openpi_config.get_config("pi05_droid_finetune_franka")
-    print("[模型加载] 创建训练策略...")
-    policy = policy_config.create_trained_policy(cfg, checkpoint_path)
-    model_load_time = time.time() - model_start_time
-    print(f"[模型加载] 模型加载完成，耗时: {model_load_time:.2f}秒")
-    return policy
-
-# ========= Franka 客户端初始化 =========
-def init_franka_client(ip: str, port: int):
-    """
-    初始化 Franka 客户端
-    """
-    print(f"[初始化] 连接 Franka 机器人 (IP: {ip}, Port: {port})...")
-    franka_client = FrankaInterfaceClient(ip=ip, port=port)
-    franka_client.gripper_initialize()
-    franka_client.robot_start_joint_impedance_control()
-    print("[初始化] Franka 机器人连接成功")
-    return franka_client
-
-# ========= Franka 控制函数 =========
-def get_franka_state(franka_client: FrankaInterfaceClient) -> np.ndarray:
-    """
-    获取 Franka 机器人状态，返回 8 维状态向量
-    [joint1-7_positions, gripper_position]
-    """
-    joint_positions = franka_client.robot_get_joint_positions()  # (7,)
-    print(f"[状态获取] 当前关节位置: {joint_positions}")
-    # ee_pose = franka_client.robot_get_ee_pose()
-    # print(f"[状态获取] 当前末端执行器位姿: {ee_pose}")
-    gripper_width = franka_client.gripper_get_state()["width"]
-    # print(f"[状态获取] 当前夹爪宽度: {gripper_width}")
-    gripper_state = max(0.0, min(1.0, gripper_width/0.0801))
-    gripper_position = 0.0 if gripper_state  < 0.7 else 1.0
-    print(f"[状态获取] 当前夹爪二进制状态: {gripper_position} (位置: {gripper_state})")
-    # 构造状态向量
-    state = np.concatenate([joint_positions, np.array([gripper_position])])
-
-    print(f"[状态获取] 状态向量: {state}")
-    return state
-
-def exec_franka_chunk(franka_client: FrankaInterfaceClient, actions: np.ndarray, damping: float, action_rate_hz: float) -> Dict[str, Any]:
-    """
-    执行动作序列控制 Franka 机器人
-    actions: float32 (n,8)，前7维是关节调整量，第8维是夹爪控制
-    """
-    try:
-        # 获取当前关节位置
-        current_joints = franka_client.robot_get_joint_positions()
+        # Model config
+        model = cfg["model"]
+        self.model_config = _config.get_config(model["name"])
+        self.checkpoint_dir = home / model["checkpoint_dir"]
         
-        for i, action in enumerate(actions):
-            # 计算目标关节位置（相对调整）
-            # target_joints = current_joints + action[:7] * damping
-            target_joints = action[:7]
-            
-            # 执行关节位置控制
-            print(f"[执行动作 {i+1}/{len(actions)}] 关节目标位置: {target_joints}")
-            franka_client.robot_update_desired_joint_positions(target_joints)
-            print(f"[执行动作 {i+1}/{len(actions)}] 夹爪目标宽度: {action[7]*0.0801}")
-            # gripper_width = action[7]*0.0801
-            gripper_command = 0 if action[7] < 0.7 else 1
-            franka_client.gripper_goto(width=gripper_command, speed=0.1, force=10.0)
-            current_joints = target_joints
-            
-            time.sleep(1.0/action_rate_hz)
+        # Camera config
+        cam = cfg["cameras"]
+        self.wrist_cam_serial = cam["wrist_cam_serial"]
+        self.exterior_cam_serial = cam["exterior_cam_serial"]
+        self.cam_fps = cam.get("fps", 30)
+
+        # Video config
+        video = cfg["video"]
+        self.video_fps = video.get("fps", 7)
+        self.visualize = video["visualize"]
+
+        # Robot config
+        robot = cfg["robot"]
+        self.robot_ip = robot["ip"]
+        self.robot_port = robot["port"]
+        self.initial_pose = np.asarray(robot["initial_pose"], dtype=np.float32)
+        self.action_fps = robot["action_fps"]
+        self.action_horizon = robot["action_horizon"]
+
+        # Gripper config
+        gripper = cfg["gripper"]
+        self.close_threshold = gripper["close_threshold"]
+        self.gripper_force = gripper["gripper_force"]
+        self.gripper_speed = gripper["gripper_speed"]
+        self.gripper_reverse = gripper["gripper_reverse"]
+
+        # Task config
+        task = cfg["task"]
+        self.task_description = task["description"]
         
-        return {"ok": True, "message": "动作执行完成"}
-    except Exception as e:
-        print(f"[执行动作失败] {e}")
-        return {"ok": False, "message": str(e)}
+        # time stamps
+        time_str = time.strftime('%Y%m%d-%H%M%S')
+        time_path = time.strftime('%Y%m%d')
 
-# def build_pi0_example(front_img: Image.Image, wrist_img: Image.Image, state14: np.ndarray, prompt: str) -> Dict[str, Any]:
-#     return {
-#         "observation/exterior_image_1_left": image_tools.resize_with_pad(np.array(front_img), 224, 224),
-#         "observation/wrist_image_left":      image_tools.resize_with_pad(np.array(wrist_img), 224, 224),
-#         "observation/joint_position":        state14[1:8],  # Franka 关节位置
-#         "observation/gripper_position":      state14[0],  # 夹爪位置
-#         "prompt":                            prompt,
-#     }
+        # base dir
+        base_dir = Path(__file__).parent
+        log_dir = base_dir / "logs"
+        video_dir = base_dir / "videos" / time_path
 
-def build_pi0_example(front_img: Image.Image, wrist_img: Image.Image, state: np.ndarray, prompt: str) -> Dict[str, Any]:
-    # 将关节位置和夹爪位置合并为8维状态向量
-    state = np.concatenate([
-        state[0:7],   # 关节位置
-        [state[7]]    # 夹爪状态
-    ])
-    
-    return {
-        "observation/image": image_tools.resize_with_pad(np.array(front_img), 224, 224),
-        "observation/wrist_image": image_tools.resize_with_pad(np.array(wrist_img), 224, 224),
-        "observation/state": state,  # 8维状态向量
-        "prompt": prompt,
-    }
+        # create dir
+        (log_dir / "all_logs").mkdir(parents=True, exist_ok=True)
+        video_dir.mkdir(parents=True, exist_ok=True)
 
-def stream_closed_loop_chunks(
-    franka_client: FrankaInterfaceClient,
-    policy,
-    prompt: str,
-    infer_times: int,
-    chunk_steps: int,
-    action_rate_hz: float,
-    damping: float
-) -> Dict[str, Any]:
-    """
-    闭环控制流程：
-      get_state → pi0 推理 → 执行动作序列 → 循环
-    """
-    task_id = str(uuid.uuid4())
-    success = 0
-    timeouts = 0
-    rtts: List[float] = []
-    t0 = time.perf_counter()
-    inference_start_time = time.time()
-    
-    print(f"[推理任务] 开始新任务 (ID: {task_id})")
-    print(f"[推理任务] 参数: infer_times={infer_times}, chunk_steps={chunk_steps}, step_rate_hz={action_rate_hz}")
+        # log paths
+        latest_path = log_dir / "latest.yaml"
+        log_path = log_dir / "all_logs" / f"log_{time_str}.yaml"
 
-    while success < infer_times:
-        # 1) 抓图
-        frame_time = time.time()
-        front_img, wrist_img = get_latest_rgb()
-        if front_img is None:
-            continue
-        print(f"[推理步骤 {success+1}/{infer_times}] 图像获取完成，耗时: {time.time() - frame_time:.2f}秒")
+        # video paths
+        wrist_video = video_dir / f"wrist_{time_str}.mp4"
+        exterior_video = video_dir / f"exterior_{time_str}.mp4"
 
-        # 2) 取状态
-        state_time = time.time()
+        # Recorder  
+        self.recorder = Recorder(log_path=log_path, video_path=[wrist_video, exterior_video], display_fps=self.video_fps, visualize=self.visualize)
+        
+        # create symlink to latest log
+        update_latest_symlink(log_path, latest_path)
+
+        # create FPS counters
+        self.fps_action = FpsCounter(name="action")
+
+        # Internal states
+        self.robot_client = None
+        self.cameras = None
+
+
+    # --------------------------- ROBOT --------------------------- #
+    def connect_robot(self):
+        """Connect to Franka robot and print current state."""
         try:
-            state = get_franka_state(franka_client)
-            print(f"[推理步骤 {success+1}/{infer_times}] 状态获取完成，耗时: {time.time() - state_time:.2f}秒")
-        except Exception as e:
-            timeouts += 1
-            print(f"[推理步骤 {success+1}/{infer_times}] 状态获取失败: {e}")
-            continue
+            logging.info("\n===== [ROBOT] Connecting to Franka robot =====")
+            self.robot_client = FrankaInterfaceClient(ip=self.robot_ip, port=self.robot_port)
+            self.robot_client.gripper_initialize()
+            self.robot_client.robot_start_joint_impedance_control()
 
-        # 3) 推理 → 取前 n 步
-        inference_time = time.time()
-        example = build_pi0_example(front_img, wrist_img, state, prompt)
-        print(f"[推理步骤 {success+1}/{infer_times}] 准备推理输入...")
-        act_chunk = policy.infer(example)["actions"]          # (H,8)
-        inference_duration = time.time() - inference_time
-        print(f"[推理步骤 {success+1}/{infer_times}] 模型推理完成，耗时: {inference_duration:.2f}秒")
-        
-        if not isinstance(act_chunk, np.ndarray):
-            act_chunk = np.asarray(act_chunk)
-        if act_chunk.ndim != 2 or act_chunk.shape[1] != 8:
-            raise RuntimeError(f"pi0 返回非法形状: {act_chunk.shape}")
-        n = min(int(chunk_steps), int(act_chunk.shape[0]))
-        actions_to_send = act_chunk[:n].astype(np.float32, copy=False)  # (n,8)
-
-        # 显示进度
-        progress_percent = (success / infer_times) * 100 if infer_times > 0 else 0
-        elapsed_time = time.time() - inference_start_time
-        if success > 0:
-            avg_time_per_step = elapsed_time / success
-            remaining_time = avg_time_per_step * (infer_times - success)
-            remaining_str = f", 预计剩余: {remaining_time:.1f}秒"
-        else:
-            remaining_str = ""
-        
-        print(f"[进度] 已完成 {success}/{infer_times} ({progress_percent:.1f}%){remaining_str}")
-        
-        print(f"[推理步骤 {success+1}/{infer_times}] 生成 {n} 步动作序列")
-        for i in range(n):
-            action_list_3f = [f"{x:.3f}" for x in actions_to_send[i].tolist()]
-            print(f"[inference step {success+1}/{infer_times} chunk {i+1}/{n}] actions: {action_list_3f}")
-
-        # 4) 执行动作序列
-        exec_time = time.time()
-        try:
-            print(f"[推理步骤 {success+1}/{infer_times}] 执行动作序列...")
-            rep = exec_franka_chunk(franka_client, actions_to_send, damping, action_rate_hz)
-            exec_duration = time.time() - exec_time
-            print(f"[推理步骤 {success+1}/{infer_times}] 动作执行完成，耗时: {exec_duration:.2f}秒")
-            
-            rtts.append((time.perf_counter() - t0) * 1000.0)
-            if rep.get("ok", False):
-                success += 1
-                print(f"[stream] 动作执行成功 ({success}/{infer_times})")
+            # Joint positions
+            joints = self.robot_client.robot_get_joint_positions().tolist()
+            if joints and len(joints) == 7:
+                formatted = [round(j, 4) for j in joints]
+                logging.info(f"[ROBOT] Current joint positions: {formatted}")
             else:
-                print(f"[stream] 动作执行失败: {rep}")
+                logging.info("[ERROR] Failed to read joint positions.")
+
+            # TCP pose
+            tcp_pose = self.robot_client.robot_get_ee_pose().tolist()
+            if tcp_pose and len(tcp_pose) == 6:
+                formatted_pose = [round(p, 4) for p in tcp_pose]
+                logging.info(f"[ROBOT] Current TCP pose: {formatted_pose}")
+                logging.info(
+                    f"[ROBOT] Translation (m): x={formatted_pose[0]}, y={formatted_pose[1]}, z={formatted_pose[2]}"
+                )
+                logging.info(
+                    f"[ROBOT] Rotation (rad): rx={formatted_pose[3]}, ry={formatted_pose[4]}, rz={formatted_pose[5]}"
+                )
+                logging.info("===== [ROBOT] Franka initialized successfully =====\n")
+            else:
+                logging.info("[ERROR] Failed to read TCP pose.")
+
         except Exception as e:
-            timeouts += 1
-            print(f"[推理步骤 {success+1}/{infer_times}] 执行异常: {e}")
-            continue
+            logging.error("===== [ERROR] Failed to connect to Franka robot =====")
+            logging.error(f"Exception: {e}\n")
+            exit(1)
+    # --------------------------- CAMERAS --------------------------- #
+    def connect_cameras(self):
+        """Initialize and connect RealSense cameras."""
+        try:
+            logging.info("\n===== [CAM] Initializing cameras =====")
 
-    # 显示最终完成信息
-    total_time = time.time() - inference_start_time
-    print(f"[任务完成] 完成 {infer_times} 次推理，总耗时: {total_time:.1f}秒，平均每步: {(total_time/infer_times):.2f}秒")
-    print(f"[任务完成] 失败次数: {timeouts}")
+            wrist_cfg = RealSenseCameraConfig(
+                serial_number_or_name=self.wrist_cam_serial,
+                fps=self.cam_fps,
+                width=640,
+                height=480,
+                color_mode=ColorMode.RGB,
+                use_depth=False,
+                rotation=Cv2Rotation.NO_ROTATION,
+            )
 
-    elapsed = time.perf_counter() - t0
-    return {
-        "task_id": task_id,
-        "model_infer_times": infer_times,
-        "chunk_steps": chunk_steps,
-        "step_rate_hz": action_rate_hz,
-        "timeouts": timeouts,
-        "elapsed_s": elapsed,
-        "avg_roundtrip_ms": (float(np.mean(rtts)) if rtts else None),
-    }
+            exterior_cfg = RealSenseCameraConfig(
+                serial_number_or_name=self.exterior_cam_serial,
+                fps=self.cam_fps,
+                width=640,
+                height=480,
+                color_mode=ColorMode.RGB,
+                use_depth=False,
+                rotation=Cv2Rotation.NO_ROTATION,
+            )
 
-def main(config_path: str = "config.yaml"):
-    """
-    主函数
-    """
-    # 加载配置文件，如果不存在则生成默认配置
-    if not os.path.exists(config_path):
-        config = generate_default_config(config_path)
-    else:
-        config = load_config(config_path)
-    
-    # 提取配置参数
-    robot_config = config.get("robot", {})
-    model_config = config.get("model", {})
-    task_config = config.get("task", {})
-    
-    # 加载模型
-    policy = load_model(model_config.get("checkpoint_path"))
-    
-    # 初始化 Franka 客户端
-    franka_client = init_franka_client(robot_config.get("ip"), robot_config.get("port"))
-    
-    print(f"[初始化] 系统组件初始化完成，总耗时: {time.time() - start_time:.2f}秒")
-    print(f"[系统就绪] 开始执行任务...")
-    
-    # 执行闭环控制任务
-    stats = stream_closed_loop_chunks(
-        franka_client=franka_client,
-        policy=policy,
-        prompt=task_config.get("prompt"),
-        infer_times=model_config.get("infer_times"),
-        chunk_steps=model_config.get("chunk_steps"),
-        action_rate_hz=robot_config.get("action_rate_hz"),
-        damping=robot_config.get("damping")
-    )
-    
-    # 显示任务统计信息
-    print("\n[任务统计]")
-    print(f"任务ID: {stats['task_id']}")
-    print(f"模型推理次数: {stats['model_infer_times']}")
-    print(f"每次推理发送步数: {stats['chunk_steps']}")
-    print(f"动作频率: {stats['step_rate_hz']} Hz")
-    print(f"超时次数: {stats['timeouts']}")
-    print(f"总耗时: {stats['elapsed_s']:.2f} 秒")
-    if stats['avg_roundtrip_ms']:
-        print(f"平均往返时间: {stats['avg_roundtrip_ms']:.2f} ms")
+            camera_config = {"wrist_image": wrist_cfg, "exterior_image": exterior_cfg}
+            self.cameras = make_cameras_from_configs(camera_config)
 
+            for name, cam in self.cameras.items():
+                cam.connect()
+                logging.info(f"[CAM] {name} connected successfully.")
+
+            logging.info("===== [CAM] Cameras initialized successfully =====\n")
+
+        except Exception as e:
+            logging.error("[ERROR] Failed to initialize cameras.")
+            logging.error(f"Exception: {e}\n")
+            self.cameras = None
+
+    # --------------------------- OBS TRANSFER --------------------------- #
+    def _transfer_obs_state(self, obs: Dict[str, Any]) -> Dict[str, Any]:
+        """Transfer raw observation state to Franka policy format."""
+
+        state = np.concatenate((
+            np.asarray(obs["joint_positions"], dtype=np.float32),
+            np.asarray([obs["gripper_position"]], dtype=np.float32),
+        ))
+
+        franka_obs = {
+            "observation/state": state,
+            "observation/image": image_tools.convert_to_uint8(
+                image_tools.resize_with_pad(obs["exterior_image"], 224, 224)
+            ),
+            "observation/wrist_image": image_tools.convert_to_uint8(
+                image_tools.resize_with_pad(obs["wrist_image"], 224, 224)
+            ),
+            "prompt": obs["prompt"],
+        }
+
+        return franka_obs
+
+    # --------------------------- OBS STATE --------------------------- #
+    def get_obs_state(self) -> Dict[str, Any]:
+        """Return current observation from robot."""
+        obs = {}
+
+        # Robot state
+        if self.robot_client:
+            obs["joint_positions"] = self.robot_client.robot_get_joint_positions()
+
+        # Camera images
+        if self.cameras:
+            for name, cam in self.cameras.items():
+                frame = cam.read()
+                obs[name] = frame
+
+        # Task description    
+        if self.task_description:
+            obs["prompt"] = self.task_description
+
+        # Gripper state
+        if self.robot_client:
+            gripper_width = self.robot_client.gripper_get_state()["width"]
+            gripper_state = max(0.0, min(1.0, gripper_width/0.0801))
+            gripper_position = 0.0 if gripper_state  < self.close_threshold else 1.0
+            obs["gripper_position"] = gripper_position
+        
+        return self._transfer_obs_state(obs) 
+
+    # --------------------------- ACTION EXECUTION --------------------------- #
+    def execute_actions(self, actions: np.ndarray, block: bool = False):
+        """Execute the inferenced actions from the model."""
+        if self.robot_client is None:
+            logging.error("[ERROR] Robot controller not connected. Cannot execute actions.")
+            return
+
+        if block:
+            logging.info("[STATE] Moving robot to initial pose...")
+            self.robot_client.robot_update_desired_joint_positions(actions)
+            logging.info("[STATE] Robot reached initial pose.")
+        else:
+            for i, action in enumerate(actions[:self.action_horizon]):
+                start_time = time.perf_counter()
+
+                joint_positions = action[:7]
+                # Move robot
+                self.robot_client.robot_update_desired_joint_positions(joint_positions)
+                # Control gripper
+                gripper_command = 0 if action[7] < self.close_threshold else 1
+                if self.gripper_reverse:
+                    gripper_command = 1 - gripper_command
+                self.robot_client.gripper_grasp(grasp_width=gripper_command, speed=self.gripper_speed, force=self.gripper_force)
+                elapsed = time.perf_counter() - start_time
+                to_sleep = 1.0 / self.action_fps - elapsed
+                if to_sleep > 0:
+                    time.sleep(to_sleep)
+                self.fps_action.update()
+
+    # --------------------------- PIPELINE --------------------------- #
+    def run(self):
+        """Main pipeline: connect robot, cameras, and print state."""
+        logging.info("========== Starting Inference Pipeline ==========")
+        self.connect_robot()
+        self.connect_cameras()
+        self.execute_actions(self.initial_pose, block=True) # move to initial pose
+        obs = self.get_obs_state()
+        logging.info(f"[STATE] Observation state: {obs.keys()}")
+        policy = _policy_config.create_trained_policy(self.model_config, self.checkpoint_dir)
+        logging.info("Warming up the model")
+        start = time.time()
+        policy.infer(obs)
+        logging.info(f"Model warmup completed, took {time.time() - start:.2f}s")
+        infer_time = 1
+        logging.info("========== Starting Inference Loop ==========")
+        try:
+            while True:
+                start_time = time.perf_counter()
+                obs = self.get_obs_state()
+                result = policy.infer(obs)
+                self.execute_actions(result["actions"])
+                self.recorder.submit_actions(result["actions"][:self.action_horizon], infer_time, obs["prompt"])
+                self.recorder.submit_obs(obs)
+                end_time = time.perf_counter()
+                logging.info(f"[STATE] Inference loop rate: {1 / (end_time - start_time):.1f} HZ")
+                infer_time += 1
+        except KeyboardInterrupt:
+            logging.info("[INFO] KeyboardInterrupt detec ted. Saving recorded videos before exiting...")
+
+        except Exception as e:
+            logging.error(f"[ERROR] Inference loop encountered an error: {e}")
+
+        try:
+            ans = input("Save recorded videos before exiting? [Y/n]: ").strip().lower()
+            if ans in ("", "y", "yes"):
+                logging.info("[INFO] Saving recorded videos before exiting...")
+                self.recorder.save_video()
+        except Exception as e:
+            logging.error(f"[ERROR] Failed to save videos: {e}")
+
+# --------------------------- MAIN --------------------------- #
+def main():
+    config_path = Path(__file__).parent / "config" / "cfg_franka_pi.yaml"
+    inference = Inference(config_path)
+    inference.run()
+
+# --------------------------- ENTRY POINT --------------------------- #
 if __name__ == "__main__":
-    import argparse
-    
-    # 解析命令行参数
-    parser = argparse.ArgumentParser(description="Pi05 with Franka robot control")
-    parser.add_argument(
-        "--config", 
-        type=str, 
-        default="examples/franka/config.yaml", 
-        help="YAML configuration file path"
-    )
-    args = parser.parse_args()
-    
-    # 执行主程序
-    main(args.config)
+    main()

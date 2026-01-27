@@ -9,11 +9,12 @@ import zerorpc
 log = logging.getLogger(__name__)
 
 class FrankaInterfaceClient:
-    def __init__(self, ip='192.168.1.104', port=4242):
+    def __init__(self, ip='192.168.110.15', port=4242):
         try:
             self.server = zerorpc.Client(heartbeat=20)
             self.server.connect(f"tcp://{ip}:{port}")
             log.info("Connected to server")
+            self.gripper_initialize()
         except:
             log.error("Failed to connect to server")
 
@@ -172,7 +173,10 @@ if __name__ == "__main__":
     Franka.gripper_goto(width=0.06, speed=0.1, force=10.0)
     gripper_state = Franka.gripper_get_state()
     print(f"Current gripper state: {gripper_state}")
-    
+
+    joint_positions = Franka.robot_get_joint_positions()
+    print(f"Current joint positions: {joint_positions}")
+
     # Franka.gripper_goto(width=0.08, speed=0.1, force=10.0)
     # Reset
     Franka.robot_go_home()
@@ -183,7 +187,7 @@ if __name__ == "__main__":
 
     # Command robot to pose (move 4th and 6th joint)
     joint_positions_desired = np.array(
-        [-0.14, -0.02, -0.05, -1.57, 0.05, 1.50, -0.91]
+        [ 0.20440547, 0.41632354, -0.2819441, -1.50227118, 0.05385307, 1.88945544, -0.9376756 ]
     )
     print(f"\nMoving joints to: {joint_positions_desired} ...\n")
     state_log = Franka.robot_move_to_joint_positions(joint_positions_desired, time_to_go=2.0)

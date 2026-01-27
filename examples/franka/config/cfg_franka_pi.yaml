@@ -1,0 +1,28 @@
+model:
+  name: pi05_droid_finetune_franka
+  checkpoint_dir: /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_franka/pick_and_place_merged/15000
+
+cameras:
+  wrist_cam_serial: "344322074412"
+  exterior_cam_serial: "243322071821"
+  fps: 15
+
+video:
+  fps: 7
+  visualize: true
+
+robot:
+  ip: 192.168.110.15
+  port: 4242
+  initial_pose: [0.20440547, 0.41632354, -0.2819441, -1.50227118, 0.05385307, 1.88945544, -0.9376756]
+  action_fps: 15
+  action_horizon: 10
+
+gripper:
+  close_threshold: 0.7
+  gripper_force: 20.0
+  gripper_speed: 0.1
+  gripper_reverse: false
+
+task:
+  description: pick the red cube and put it into the grey box

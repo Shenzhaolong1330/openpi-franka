@@ -1014,7 +1014,7 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora"
         ),
         data=LeRobotFrankaDataConfig(
-            repo_id="/home/deepcybo/.cache/huggingface/lerobot/shenzhaolong/pick_cube_into_box_20251222_v01",
+            repo_id="/home/deepcybo/.cache/huggingface/lerobot/physbrain3/pick_and_place_merged",
             base_config=DataConfig(prompt_from_task=False, action_sequence_keys=("action",)),
             extra_delta_transform=True,
         ),

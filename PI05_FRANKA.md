@@ -293,7 +293,7 @@ For computing the state norm, we need to set the `OBS_INDICES` environment varia
 ```bash
 # OBS_INDICES is the indices of the joint positions and gripper position in the observation.state
 # --config-name is the name of the config name in the config.py
-OBS_INDICES=1,2,3,4,5,6,7,9 uv run scripts/compute_norm_stats.py --config-name pi05_droid_finetune_franka
+OBS_INDICES=1,2,3,4,5,6,7,8 uv run scripts/compute_norm_stats.py --config-name pi05_droid_finetune_franka
 ```
 The computed state norm is saved in the `norm_stats.json` file in the dataset directory.
 
@@ -302,8 +302,11 @@ The computed state norm is saved in the `norm_stats.json` file in the dataset di
 I collected 50 training trajectories for finetuning the model.
 
 ```python
-OBS_INDICES=1,2,3,4,5,6,7,9 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_droid_finetune_franka --exp_name=pick_cube_into_box_20251222_v01 --overwrite
+OBS_INDICES=1,2,3,4,5,6,7,8 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_droid_finetune_franka --exp_name=pick_cube_into_box_20251222_v01 --overwrite
 ```
 
 ## Inference the Model
+```python
+uv run examples/franka/inference_pi_with_franka.py
+```
 [inference_pi_with_franka.py](examples/franka/inference_pi_with_franka.py)
