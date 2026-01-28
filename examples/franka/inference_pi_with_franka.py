@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Any
 from utils import FpsCounter
 from openpi_client import image_tools
-from recorder_ur import Recorder 
+from examples.franka.recorder import Recorder 
 from openpi.training import config as _config
 from openpi.policies import policy_config as _policy_config
 from lerobot.cameras.configs import ColorMode, Cv2Rotation
@@ -111,7 +111,6 @@ class Inference:
             logging.info("\n===== [ROBOT] Connecting to Franka robot =====")
             self.robot_client = FrankaInterfaceClient(ip=self.robot_ip, port=self.robot_port)
             self.robot_client.gripper_initialize()
-            self.robot_client.robot_start_joint_impedance_control()
 
             # Joint positions
             joints = self.robot_client.robot_get_joint_positions().tolist()
@@ -236,11 +235,12 @@ class Inference:
         if self.robot_client is None:
             logging.error("[ERROR] Robot controller not connected. Cannot execute actions.")
             return
-
         if block:
             logging.info("[STATE] Moving robot to initial pose...")
-            self.robot_client.robot_update_desired_joint_positions(actions)
+            self.robot_client.robot_move_to_joint_positions(positions = actions[:7], time_to_go = 2.0)
+            self.robot_client.gripper_goto(width=0.0801, speed=self.gripper_speed, force=self.gripper_force)
             logging.info("[STATE] Robot reached initial pose.")
+
         else:
             for i, action in enumerate(actions[:self.action_horizon]):
                 start_time = time.perf_counter()
@@ -252,7 +252,7 @@ class Inference:
                 gripper_command = 0 if action[7] < self.close_threshold else 1
                 if self.gripper_reverse:
                     gripper_command = 1 - gripper_command
-                self.robot_client.gripper_grasp(grasp_width=gripper_command, speed=self.gripper_speed, force=self.gripper_force)
+                self.robot_client.gripper_grasp(grasp_width=gripper_command*0.0801, speed=self.gripper_speed, force=self.gripper_force)
                 elapsed = time.perf_counter() - start_time
                 to_sleep = 1.0 / self.action_fps - elapsed
                 if to_sleep > 0:
@@ -266,6 +266,7 @@ class Inference:
         self.connect_robot()
         self.connect_cameras()
         self.execute_actions(self.initial_pose, block=True) # move to initial pose
+        self.robot_client.robot_start_joint_impedance_control()
         obs = self.get_obs_state()
         logging.info(f"[STATE] Observation state: {obs.keys()}")
         policy = _policy_config.create_trained_policy(self.model_config, self.checkpoint_dir)

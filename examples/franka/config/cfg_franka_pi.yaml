@@ -5,7 +5,7 @@ model:
 cameras:
   wrist_cam_serial: "344322074412"
   exterior_cam_serial: "243322071821"
-  fps: 15
+  fps: 30
 
 video:
   fps: 7
@@ -20,7 +20,7 @@ robot:
 
 gripper:
   close_threshold: 0.7
-  gripper_force: 20.0
+  gripper_force: 10
   gripper_speed: 0.1
   gripper_reverse: false
 

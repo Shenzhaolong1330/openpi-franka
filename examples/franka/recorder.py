@@ -17,7 +17,8 @@ class Recorder:
         self.log_path = log_path
 
         # video paths
-        self.left_wrist_video = video_path[0]
+        # self.left_wrist_video = video_path[0]
+        self.wrist_video = video_path[0]
         self.exterior_video = video_path[1]
 
         self.display_fps = display_fps
@@ -28,8 +29,9 @@ class Recorder:
 
         # store frames for video
         self.frames_ext = []    # exterior camera frames
-        self.frames_left_wrist = []  # left wrist camera frames
-        self.frames_right_wrist = []  # right wrist camera frames
+        # self.frames_left_wrist = []  # left wrist camera frames
+        # self.frames_right_wrist = []  # right wrist camera frames
+        self.frames_wrist = []  # wrist camera frames
 
         # start threads
         threading.Thread(target=self._logger_thread, daemon=True).start()
@@ -53,16 +55,20 @@ class Recorder:
         while True:
             try:
                 obs = self.queue_vis.get()
-                l_wrist, ext, r_wrist = map(self.to_bgr, [obs["observation/left_wrist_image"], obs["observation/exterior_image"], obs["observation/right_wrist_image"]])
+                # l_wrist, ext, r_wrist = map(self.to_bgr, [obs["observation/left_wrist_image"], obs["observation/exterior_image"], obs["observation/right_wrist_image"]])
+                ext, wrist = map(self.to_bgr, [obs["observation/image"], obs["observation/wrist_image"]])
                 # save frames in memory (convert to uint8 to save space)
                 self.frames_ext.append(ext.astype(np.uint8))
-                self.frames_left_wrist.append(l_wrist.astype(np.uint8))
-                self.frames_right_wrist.append(r_wrist.astype(np.uint8))
+                # self.frames_left_wrist.append(l_wrist.astype(np.uint8))
+                # self.frames_right_wrist.append(r_wrist.astype(np.uint8))
+                self.frames_wrist.append(wrist.astype(np.uint8))
 
                 if self.visualize:
                     # concatenate and display
-                    combined = np.hstack((l_wrist, ext, r_wrist))
-                    cv2.imshow("Left Wrist | Exterior | Right Wrist", combined)
+                    # combined = np.hstack((l_wrist, ext, r_wrist))
+                    # cv2.imshow("Left Wrist | Exterior | Right Wrist", combined)
+                    combined = np.hstack((ext, wrist))
+                    cv2.imshow("Exterior | Wrist", combined)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         break
 
@@ -99,21 +105,25 @@ class Recorder:
     # ====================== Save Video ====================== #
     def save_video(self):
         """Save stored frames as two separate MP4 videos using H.264."""
-        if not self.frames_ext or not self.frames_left_wrist or not self.frames_right_wrist:
+        # if not self.frames_ext or not self.frames_left_wrist or not self.frames_right_wrist:
+        if not self.frames_ext or not self.frames_wrist:
             print("No frames to save.")
             return
 
         print("\nSaving exterior camera video...")
         self._encode(self.frames_ext, self.exterior_video, vcodec="libx264", crf=23, preset="veryslow")
 
-        print("\nSaving left wrist camera video...")
-        self._encode(self.frames_left_wrist, self.left_wrist_video, vcodec="libx264", crf=23, preset="veryslow")
+        # print("\nSaving left wrist camera video...")
+        # self._encode(self.frames_left_wrist, self.left_wrist_video, vcodec="libx264", crf=23, preset="veryslow")
+        print("\nSaving wrist camera video...")
+        self._encode(self.frames_wrist, self.wrist_video, vcodec="libx264", crf=23, preset="veryslow")
 
     # ====================== Save Video ====================== #
     def save_videos_multi_codec(self):
         """Save frames in memory as videos with H.264 / H.265 / AV1."""
 
-        if not self.frames_ext or not self.frames_left_wrist or not self.frames_right_wrist:
+        # if not self.frames_ext or not self.frames_left_wrist or not self.frames_right_wrist:
+        if not self.frames_ext or not self.frames_wrist:
             print("No frames to save.")
             return
 
@@ -153,10 +163,14 @@ class Recorder:
             out_path = self.exterior_video.parent / f"ext_{vcodec}.mp4"
             _encode(self.frames_ext, out_path, vcodec=vcodec, crf=crf, preset=preset)
 
-        print("\n🔧 Saving left wrist camera videos...")
+        # print("\n🔧 Saving left wrist camera videos...")
+        # for vcodec, crf, preset in codecs:
+        #     out_path = self.left_wrist_video.parent / f"left_wrist_{vcodec}.mp4"
+        #     _encode(self.frames_left_wrist, out_path, vcodec=vcodec, crf=crf, preset=preset)
+        print("\n🔧 Saving wrist camera videos...")
         for vcodec, crf, preset in codecs:
-            out_path = self.left_wrist_video.parent / f"left_wrist_{vcodec}.mp4"
-            _encode(self.frames_left_wrist, out_path, vcodec=vcodec, crf=crf, preset=preset)
+            out_path = self.wrist_video.parent / f"wrist_{vcodec}.mp4"
+            _encode(self.frames_wrist, out_path, vcodec=vcodec, crf=crf, preset=preset)
 
     # ====================== Utility Functions ====================== #
     def to_bgr(self, img):
