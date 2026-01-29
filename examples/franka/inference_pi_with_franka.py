@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Dict, Any
 from utils import FpsCounter
 from openpi_client import image_tools
-from examples.franka.recorder import Recorder 
+from recorder import Recorder 
 from openpi.training import config as _config
 from openpi.policies import policy_config as _policy_config
 from lerobot.cameras.configs import ColorMode, Cv2Rotation
@@ -237,8 +237,8 @@ class Inference:
             return
         if block:
             logging.info("[STATE] Moving robot to initial pose...")
-            self.robot_client.robot_move_to_joint_positions(positions = actions[:7], time_to_go = 2.0)
-            self.robot_client.gripper_goto(width=0.0801, speed=self.gripper_speed, force=self.gripper_force)
+            self.robot_client.robot_move_to_joint_positions(positions = actions[:7], time_to_go = 1.0)
+            self.robot_client.gripper_grasp(grasp_width=0.0801, speed=self.gripper_speed, force=self.gripper_force, epsilon_inner=0.0801)
             logging.info("[STATE] Robot reached initial pose.")
 
         else:
@@ -252,7 +252,7 @@ class Inference:
                 gripper_command = 0 if action[7] < self.close_threshold else 1
                 if self.gripper_reverse:
                     gripper_command = 1 - gripper_command
-                self.robot_client.gripper_grasp(grasp_width=gripper_command*0.0801, speed=self.gripper_speed, force=self.gripper_force)
+                self.robot_client.gripper_grasp(grasp_width=gripper_command*0.0801, speed=self.gripper_speed, force=self.gripper_force, epsilon_inner=0.0801)
                 elapsed = time.perf_counter() - start_time
                 to_sleep = 1.0 / self.action_fps - elapsed
                 if to_sleep > 0:

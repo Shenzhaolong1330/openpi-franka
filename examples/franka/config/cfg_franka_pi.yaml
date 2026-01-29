@@ -25,4 +25,4 @@ gripper:
   gripper_reverse: false
 
 task:
-  description: pick the red cube and put it into the grey box
+  description: pick two blue cubes and put them into the grey box
