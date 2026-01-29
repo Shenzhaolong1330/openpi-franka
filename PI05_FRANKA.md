@@ -306,7 +306,8 @@ OBS_INDICES=1,2,3,4,5,6,7,8 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/tr
 ```
 
 ## Inference the Model
+Remember to change the dataset path in the local machine to the path of your own dataset and sync the `norm_stats.json` file. Cause the `norm_stats.json` file is usually computed in the cloud.
+
 ```python
 uv run examples/franka/inference_pi_with_franka.py
 ```
-[inference_pi_with_franka.py](examples/franka/inference_pi_with_franka.py)
