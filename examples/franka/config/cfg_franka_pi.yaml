@@ -1,7 +1,6 @@
 model:
   name: pi05_droid_finetune_franka
-  checkpoint_dir: /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_franka/pick_and_place_merged/15000
-
+  checkpoint_dir: /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_franka/pick_all_object_complete/45000
 cameras:
   wrist_cam_serial: "344322074412"
   exterior_cam_serial: "243322071821"
@@ -25,4 +24,4 @@ gripper:
   gripper_reverse: false
 
 task:
-  description: pick two blue cubes and put them into the grey box
+  description: pick up all the green cubes and put them into the brown basket.

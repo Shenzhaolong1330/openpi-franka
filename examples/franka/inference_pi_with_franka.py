@@ -238,7 +238,7 @@ class Inference:
         if block:
             logging.info("[STATE] Moving robot to initial pose...")
             self.robot_client.robot_move_to_joint_positions(positions = actions[:7], time_to_go = 1.0)
-            self.robot_client.gripper_grasp(grasp_width=0.0801, speed=self.gripper_speed, force=self.gripper_force, epsilon_inner=0.0801)
+            self.robot_client.gripper_grasp(width=0.0801, speed=self.gripper_speed, force=self.gripper_force, epsilon_inner=0.0801, epsilon_outer=0.0801)
             logging.info("[STATE] Robot reached initial pose.")
 
         else:
@@ -252,7 +252,7 @@ class Inference:
                 gripper_command = 0 if action[7] < self.close_threshold else 1
                 if self.gripper_reverse:
                     gripper_command = 1 - gripper_command
-                self.robot_client.gripper_grasp(grasp_width=gripper_command*0.0801, speed=self.gripper_speed, force=self.gripper_force, epsilon_inner=0.0801)
+                self.robot_client.gripper_goto(width=gripper_command*0.0801, speed=self.gripper_speed, force=self.gripper_force, epsilon_inner=0.0801, epsilon_outer=0.0801)
                 elapsed = time.perf_counter() - start_time
                 to_sleep = 1.0 / self.action_fps - elapsed
                 if to_sleep > 0:
@@ -265,7 +265,8 @@ class Inference:
         logging.info("========== Starting Inference Pipeline ==========")
         self.connect_robot()
         self.connect_cameras()
-        self.execute_actions(self.initial_pose, block=True) # move to initial pose
+        # self.execute_actions(self.initial_pose, block=True) # move to initial pose
+        self.robot_client.robot_go_home()
         self.robot_client.robot_start_joint_impedance_control()
         obs = self.get_obs_state()
         logging.info(f"[STATE] Observation state: {obs.keys()}")

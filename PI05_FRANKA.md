@@ -37,8 +37,8 @@ lerobot = {path = "/path/to/lerobot"}
 
 Create a conda environment for this project:
 ```bash
-conda create -n openpi-franka python=3.11
-conda activate openpi-franka
+conda create -n openpi_franka python=3.11
+conda activate openpi_franka
 ```
 Install `uv` in the conda environment:
 ```bash
@@ -306,8 +306,8 @@ OBS_INDICES=1,2,3,4,5,6,7,8 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/tr
 ```
 
 ## Inference the Model
-Remember to change the dataset path in the local machine to the path of your own dataset and sync the `norm_stats.json` file. Cause the `norm_stats.json` file is usually computed in the cloud.
+Remember to change the dataset path in the local machine (in [config.py](src/openpi/training/config.py) `TrainConfig`) to the path of your own dataset and sync the `norm_stats.json` file. Cause the `norm_stats.json` file is usually computed in the cloud.
 
-```python
+```pythonc
 uv run examples/franka/inference_pi_with_franka.py
 ```
