@@ -87,8 +87,8 @@ class Inference:
         log_path = log_dir / "all_logs" / f"log_{time_str}.yaml"
 
         # video paths
-        wrist_video = video_dir / f"wrist_{time_str}.mp4"
-        exterior_video = video_dir / f"exterior_{time_str}.mp4"
+        wrist_video = video_dir / f"{self.task_description.replace(' ', '_')}_wrist_{time_str}.mp4"
+        exterior_video = video_dir / f"{self.task_description.replace(' ', '_')}_exterior_{time_str}.mp4"
 
         # Recorder  
         self.recorder = Recorder(log_path=log_path, video_path=[wrist_video, exterior_video], display_fps=self.video_fps, visualize=self.visualize)
