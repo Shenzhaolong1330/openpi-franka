@@ -221,7 +221,7 @@ TrainConfig(
             action_expert_variant="gemma_300m_lora"
         ),
         data=LeRobotFrankaDataConfig(
-            repo_id="/home/deepcybo/.cache/huggingface/lerobot/shenzhaolong/pick_cube_into_box_20251222_v01",
+            repo_id="/home/deepcybo/.cache/huggingface/lerobot/shenzhaolong/pick_and_place_merged",
             base_config=DataConfig(prompt_from_task=False, action_sequence_keys=("action",)),
             extra_delta_transform=True,
         ),
@@ -281,10 +281,36 @@ For computing the state norm, we need to set the `OBS_INDICES` environment varia
 ```bash
 # OBS_INDICES is the indices of the joint positions and gripper position in the observation.state
 # --config-name is the name of the config name in the config.py
-OBS_INDICES=1,2,3,4,5,6,7,9 uv run scripts/compute_norm_stats.py --config-name pi05_droid_finetune_franka
+OBS_INDICES=1,2,3,4,5,6,7,8 uv run scripts/compute_norm_stats.py --config-name pi05_droid_finetune_franka
 ```
 The computed state norm is saved in the `norm_stats.json` file in the dataset directory.
 
 ## Finetune the Model
 
+I collected 50 training trajectories for finetuning the model.
+
+```python
+OBS_INDICES=1,2,3,4,5,6,7,8 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_droid_finetune_franka --exp_name=pick_and_place_robotiq_0211 --overwrite
+```
+
 ## Inference the Model
+[inference_pi_with_franka.py](examples/franka/inference_pi_with_franka.py)
+
+
+## Use Tos
+Get data from tos:
+```bash
+./tosutil cp -r -p 40 -j 50 -nfj 40 tos://c20250510/shenzhaolong/datasets/pick_all_objects_20260208/ workspace/data/robotiq
+```
+
+Send model to tos:
+```bash
+./tosutil cp -r -p 40 -j 50 -nfj 40 /vepfs-mlp2/c20250510/250303034/workspace/openpi-franka/checkpoints/pi05_droid_finetune_franka/pick_and_place_robotiq_0211/55000 tos://c20250510/shenzhaolong/datasets/model/pick_and_place_robotiq_0211/55000
+```
+
+Get model from tos:
+```bash
+tosutil cp -r -p 40 -j 50 -nfj 40 tos://c20250510/shenzhaolong/datasets/model/pick_and_place_robotiq_0211/55000 /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_franka/pick_and_place_robotiq
+```
+
+tosutil cp -r -p 40 -j 50 -nfj 40 tos://c20250510/shenzhaolong/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiFALSE-cp310-cp310-linux_x86_64.whl /vepfs-mlp2/c20250510/250303034/workspace/starVLA
