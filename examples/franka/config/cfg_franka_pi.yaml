@@ -1,8 +1,8 @@
 model:
   name: pi05_droid_finetune_franka
-  checkpoint_dir: /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_franka/pick_all_object_complete/45000
+  checkpoint_dir: /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_franka/pick_and_place_robotiq/55000/55000
 cameras:
-  wrist_cam_serial: "344322074412"
+  wrist_cam_serial: "344322074412" # 243222071212 344322074412
   exterior_cam_serial: "243322071821"
   fps: 30
 
@@ -14,7 +14,7 @@ robot:
   ip: 192.168.110.15
   port: 4242
   initial_pose: [0.20440547, 0.41632354, -0.2819441, -1.50227118, 0.05385307, 1.88945544, -0.9376756]
-  action_fps: 15
+  action_fps: 20
   action_horizon: 10
 
 gripper:
@@ -24,4 +24,6 @@ gripper:
   gripper_reverse: false
 
 task:
-  description: pick up all the green cubes and put them into the brown basket.
+  description: pick up the cucumber and put it into the brown basket.
+
+  # cucumber, red chili, radish, eggplant, carrot
