@@ -297,6 +297,13 @@ OBS_INDICES=1,2,3,4,5,6,7,8 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/tr
 [inference_pi_with_franka.py](examples/franka/inference_pi_with_franka.py)
 
 
+## Use Lerobot data tools
+
+lerobot-edit-dataset \
+    --repo_id milk_shake_merged \
+    --operation.type merge \
+    --operation.repo_ids "['milk_shake_3_19_step1_20260319_v06', 'milk_shake_3_19_step3_20260319_v06']"
+
 ## Use Tos
 Get data from tos:
 ```bash

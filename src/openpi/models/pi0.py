@@ -38,7 +38,8 @@ def make_attn_mask(input_mask, mask_ar):
         it and false where it shares the same attention mask as the previous token.
     """
     mask_ar = jnp.broadcast_to(mask_ar, input_mask.shape)
-    cumsum = jnp.cumsum(mask_ar, axis=1)
+    # Use associative_scan instead of cumsum to avoid slow XLA constant folding
+    cumsum = jax.lax.associative_scan(jax.lax.add, mask_ar.astype(jnp.int32), axis=1)
     attn_mask = cumsum[:, None, :] <= cumsum[:, :, None]
     valid_mask = input_mask[:, None, :] * input_mask[:, :, None]
     return jnp.logical_and(attn_mask, valid_mask)
