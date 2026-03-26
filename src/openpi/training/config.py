@@ -1120,7 +1120,7 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora"
         ),
         data=LeRobotFrankaDeltaEEDataConfig(
-            repo_id="/vepfs-mlp2/c20250510/250303034/workspace/data/pick_and_place_all_merged_last_dance",
+            repo_id="/vepfs-mlp2/c20250510/250303034/workspace/data/pick_and_place_all_merged_last_dance_v3.0",
             base_config=DataConfig(prompt_from_task=False, action_sequence_keys=("action",)),
             extra_delta_transform=False,
         ),
