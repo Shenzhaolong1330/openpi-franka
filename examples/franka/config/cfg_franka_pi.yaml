@@ -1,6 +1,6 @@
 model:
-  name: pi05_droid_finetune_franka
-  checkpoint_dir: /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_franka/pick_and_place_robotiq/55000/55000
+  name: pi05_droid_finetune_delta_ee_franka
+  checkpoint_dir: /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_franka_delta_ee/pick_and_place_last_dance/18000
 cameras:
   wrist_cam_serial: "344322074412" # 243222071212 344322074412
   exterior_cam_serial: "243322071821"
@@ -13,7 +13,7 @@ video:
 robot:
   ip: 192.168.110.15
   port: 4242
-  initial_pose: [0.20440547, 0.41632354, -0.2819441, -1.50227118, 0.05385307, 1.88945544, -0.9376756]
+  initial_pose: [0.00761213, -0.39547789, -0.03788094, -2.44777918, 0.09107678, 1.99305379, -1.65751863]
   action_fps: 20
   action_horizon: 10
 
@@ -23,7 +23,14 @@ gripper:
   gripper_speed: 0.1
   gripper_reverse: false
 
+# Action mode configuration
+# mode: "joint" - joint position actions (7 joints + gripper)
+#       "delta_ee" - delta end-effector actions (6 DOF pose delta + gripper)
+action_mode:
+  mode: delta_ee  # "joint" or "delta_ee"
+  ee_action_scale: 1.0  # scale factor for delta ee actions
+
 task:
-  description: pick up the cucumber and put it into the brown basket.
+  description: pick up the chinese cabbage and put it into the brown basket.
 
   # cucumber, red chili, radish, eggplant, carrot

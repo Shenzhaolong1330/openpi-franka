@@ -7,6 +7,7 @@ import threading
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any
+from scipy.spatial.transform import Rotation as R
 from utils import FpsCounter
 from openpi_client import image_tools
 from recorder import Recorder 
@@ -18,6 +19,61 @@ from lerobot.cameras import make_cameras_from_configs
 from franka_interface_client import FrankaInterfaceClient
 
 home = Path.home()
+
+def euler_to_rotation_matrix(euler_angles: np.ndarray) -> np.ndarray:
+    """Convert Euler angles (rx, ry, rz) to rotation matrix.
+    
+    Uses 'XYZ' convention (intrinsic rotations about X, then Y, then Z).
+    This matches the Franka robot's convention.
+    
+    Args:
+        euler_angles: Euler angles in radians [rx, ry, rz]
+    
+    Returns:
+        3x3 rotation matrix
+    """
+    return R.from_euler('XYZ', euler_angles).as_matrix()
+
+def rotation_matrix_to_euler(rot_matrix: np.ndarray) -> np.ndarray:
+    """Convert rotation matrix to Euler angles.
+    
+    Uses 'XYZ' convention (intrinsic rotations about X, then Y, then Z).
+    
+    Args:
+        rot_matrix: 3x3 rotation matrix
+    
+    Returns:
+        Euler angles in radians [rx, ry, rz]
+    """
+    return R.from_matrix(rot_matrix).as_euler('XYZ')
+
+def apply_delta_rotation(current_euler: np.ndarray, delta_euler: np.ndarray) -> np.ndarray:
+    """Apply delta rotation to current rotation using rotation matrices.
+    
+    For delta EE actions, the delta rotation is defined in the 
+    current end-effector frame (local frame), so we use:
+        R_new = R_current @ R_delta
+    
+    Args:
+        current_euler: Current Euler angles [rx, ry, rz] in radians
+        delta_euler: Delta Euler angles [drx, dry, drz] in radians
+    
+    Returns:
+        New Euler angles after applying delta rotation
+    """
+    # Convert current rotation to matrix
+    current_rot = euler_to_rotation_matrix(current_euler)
+    
+    # Convert delta rotation to matrix (small rotation in local frame)
+    delta_rot = euler_to_rotation_matrix(delta_euler)
+    
+    # Apply delta rotation in local frame: R_new = R_current @ R_delta
+    new_rot = current_rot @ delta_rot
+    
+    # Convert back to Euler angles
+    new_euler = rotation_matrix_to_euler(new_rot)
+    
+    return new_euler
 
 def update_latest_symlink(target: Path, link_name: Path):
     """
@@ -64,6 +120,11 @@ class Inference:
         self.gripper_force = gripper["gripper_force"]
         self.gripper_speed = gripper["gripper_speed"]
         self.gripper_reverse = gripper["gripper_reverse"]
+
+        # Action mode config
+        action_mode = cfg.get("action_mode", {})
+        self.action_mode = action_mode.get("mode", "joint")  # "joint" or "delta_ee"
+        self.ee_action_scale = action_mode.get("ee_action_scale", 0.1)  # scale factor for delta ee actions
 
         # Task config
         task = cfg["task"]
@@ -200,6 +261,27 @@ class Inference:
         }
 
         return franka_obs
+    
+    def _transfer_obs_delta_ee_state(self, obs: Dict[str, Any]) -> Dict[str, Any]:
+        """Transfer raw observation state to Franka policy format."""
+
+        state = np.concatenate((
+            np.asarray(obs["ee_pose"], dtype=np.float32),
+            np.asarray([obs["gripper_position"]], dtype=np.float32),
+        ))
+
+        franka_obs = {
+            "observation/state": state,
+            "observation/image": image_tools.convert_to_uint8(
+                image_tools.resize_with_pad(obs["exterior_image"], 224, 224)
+            ),
+            "observation/wrist_image": image_tools.convert_to_uint8(
+                image_tools.resize_with_pad(obs["wrist_image"], 224, 224)
+            ),
+            "prompt": obs["prompt"],
+        }
+
+        return franka_obs
 
     # --------------------------- OBS STATE --------------------------- #
     def get_obs_state(self) -> Dict[str, Any]:
@@ -209,6 +291,7 @@ class Inference:
         # Robot state
         if self.robot_client:
             obs["joint_positions"] = self.robot_client.robot_get_joint_positions()
+            obs["ee_pose"] = self.robot_client.robot_get_ee_pose()
 
         # Camera images
         if self.cameras:
@@ -227,7 +310,8 @@ class Inference:
             gripper_position = 0.0 if gripper_state  < self.close_threshold else 1.0
             obs["gripper_position"] = gripper_position
         
-        return self._transfer_obs_state(obs) 
+        # return self._transfer_obs_state(obs) 
+        return self._transfer_obs_delta_ee_state(obs)        
 
     # --------------------------- ACTION EXECUTION --------------------------- #
     def execute_actions(self, actions: np.ndarray, block: bool = False):
@@ -235,10 +319,18 @@ class Inference:
         if self.robot_client is None:
             logging.error("[ERROR] Robot controller not connected. Cannot execute actions.")
             return
+        
+        if self.action_mode == "delta_ee":
+            self._execute_delta_ee_actions(actions, block)
+        else:
+            self._execute_joint_actions(actions, block)
+
+    def _execute_joint_actions(self, actions: np.ndarray, block: bool = False):
+        """Execute joint position actions."""
         if block:
             logging.info("[STATE] Moving robot to initial pose...")
             self.robot_client.robot_move_to_joint_positions(positions = actions[:7], time_to_go = 1.0)
-            self.robot_client.gripper_grasp(width=0.0801, speed=self.gripper_speed, force=self.gripper_force, epsilon_inner=0.0801, epsilon_outer=0.0801)
+            self.robot_client.gripper_grasp(width=0.085, speed=self.gripper_speed, force=self.gripper_force, epsilon_inner=0.0801, epsilon_outer=0.0801)
             logging.info("[STATE] Robot reached initial pose.")
 
         else:
@@ -259,6 +351,64 @@ class Inference:
                     time.sleep(to_sleep)
                 self.fps_action.update()
 
+    def _execute_delta_ee_actions(self, actions: np.ndarray, block: bool = False):
+        """Execute delta end-effector actions.
+        
+        Action format: [delta_x, delta_y, delta_z, delta_rx, delta_ry, delta_rz, gripper]
+        The deltas are applied to the current end-effector pose using proper rotation composition.
+        """
+        if block:
+            logging.info("[STATE] Moving robot to initial pose...")
+            # For block mode, actions are absolute ee pose
+            initial_pose = actions[:6]
+            self.robot_client.robot_move_to_ee_pose(
+                position=initial_pose[:3],
+                orientation=initial_pose[3:6],
+                time_to_go=1.0
+            )
+            self.robot_client.gripper_grasp(width=0.085, speed=self.gripper_speed, force=self.gripper_force, epsilon_inner=0.0801, epsilon_outer=0.0801)
+            logging.info("[STATE] Robot reached initial pose.")
+        else:
+            # Get current ee pose as base
+            current_ee_pose = self.robot_client.robot_get_ee_pose()  # [x, y, z, rx, ry, rz]
+            current_pos = current_ee_pose[:3].copy()
+            current_euler = current_ee_pose[3:6].copy()
+            print(f"[STATE] Initial EE Pose: {current_ee_pose}")
+            for i, action in enumerate(actions[:self.action_horizon]):
+                start_time = time.perf_counter()
+
+                # Delta ee action: [delta_x, delta_y, delta_z, delta_rx, delta_ry, delta_rz, gripper]
+                delta_pos = action[:3] * self.ee_action_scale
+                delta_euler = action[3:6] * self.ee_action_scale
+                print(f"[STATE] Delta EE: {delta_pos}, {delta_euler}")
+                # Apply delta position (can be added directly)
+                target_pos = current_pos + delta_pos
+                
+                # Apply delta rotation using rotation matrices
+                target_euler = apply_delta_rotation(current_euler, delta_euler)
+                
+                # Combine into target pose
+                target_pose = np.concatenate([target_pos, target_euler])
+                
+                # Move robot to target ee pose
+                self.robot_client.robot_update_desired_ee_pose(target_pose)
+                print(f"[STATE] Target EE Pose: {target_pose}")
+                # Update current pose for next iteration
+                current_pos = target_pos.copy()
+                current_euler = target_euler.copy()
+
+                # Control gripper
+                gripper_command = 0 if action[6] < self.close_threshold else 1
+                if self.gripper_reverse:
+                    gripper_command = 1 - gripper_command
+                self.robot_client.gripper_goto(width=gripper_command*0.0801, speed=self.gripper_speed, force=self.gripper_force, epsilon_inner=0.0801, epsilon_outer=0.0801)
+                
+                elapsed = time.perf_counter() - start_time
+                to_sleep = 1.0 / self.action_fps - elapsed
+                if to_sleep > 0:
+                    time.sleep(to_sleep)
+                self.fps_action.update()
+
     # --------------------------- PIPELINE --------------------------- #
     def run(self):
         """Main pipeline: connect robot, cameras, and print state."""
@@ -266,8 +416,16 @@ class Inference:
         self.connect_robot()
         self.connect_cameras()
         # self.execute_actions(self.initial_pose, block=True) # move to initial pose
-        self.robot_client.robot_go_home()
-        self.robot_client.robot_start_joint_impedance_control()
+        self.robot_client.robot_move_to_joint_positions(positions=self.initial_pose, time_to_go=5.0)
+        
+        # Start appropriate control mode based on action_mode
+        if self.action_mode == "delta_ee":
+            logging.info("[STATE] Starting Cartesian impedance control for delta_ee mode...")
+            self.robot_client.robot_start_cartesian_impedance_control()
+        else:
+            logging.info("[STATE] Starting joint impedance control...")
+            self.robot_client.robot_start_joint_impedance_control()
+        
         obs = self.get_obs_state()
         logging.info(f"[STATE] Observation state: {obs.keys()}")
         policy = _policy_config.create_trained_policy(self.model_config, self.checkpoint_dir)
