@@ -145,7 +145,7 @@ class FrankaInterfaceClient:
         )
         print(f"[ROBOT] Joint impedance control started")
 
-    def robot_start_cartesian_impedance_control(self, Kx: np.ndarray, Kxd: np.ndarray):
+    def robot_start_cartesian_impedance_control(self, Kx: np.ndarray = None, Kxd: np.ndarray = None):
         self.server.robot_start_cartesian_impedance_control(
             Kx.tolist() if Kx is not None else None,
             Kxd.tolist() if Kxd is not None else None,
