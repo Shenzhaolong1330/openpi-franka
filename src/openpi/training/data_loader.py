@@ -138,11 +138,17 @@ def create_torch_dataset(
         return FakeDataset(model_config, num_samples=1024)
 
     dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+    
+    # 尝试使用 pyav 后端，如果失败则使用 torchcodec
+    video_backend = os.environ.get("LEROBOT_VIDEO_BACKEND", "torchcodec")
+    
     dataset = lerobot_dataset.LeRobotDataset(
         data_config.repo_id,
         delta_timestamps={
             key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
         },
+        tolerance_s=0.2,  # 增加时间容差，避免帧索引超出范围
+        video_backend=video_backend,
     )
 
     if data_config.prompt_from_task:
