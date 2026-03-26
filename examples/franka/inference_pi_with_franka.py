@@ -20,34 +20,13 @@ from franka_interface_client import FrankaInterfaceClient
 
 home = Path.home()
 
-def euler_to_rotation_matrix(euler_angles: np.ndarray) -> np.ndarray:
-    """Convert Euler angles (rx, ry, rz) to rotation matrix.
-    
-    Uses 'XYZ' convention (intrinsic rotations about X, then Y, then Z).
-    This matches the Franka robot's convention.
-    
-    Args:
-        euler_angles: Euler angles in radians [rx, ry, rz]
-    
-    Returns:
-        3x3 rotation matrix
-    """
-    return R.from_euler('XYZ', euler_angles).as_matrix()
+def rotvec_to_rotation_matrix(rotation_vector: np.ndarray) -> np.ndarray:
+    return R.from_rotvec(rotation_vector).as_matrix()
 
-def rotation_matrix_to_euler(rot_matrix: np.ndarray) -> np.ndarray:
-    """Convert rotation matrix to Euler angles.
-    
-    Uses 'XYZ' convention (intrinsic rotations about X, then Y, then Z).
-    
-    Args:
-        rot_matrix: 3x3 rotation matrix
-    
-    Returns:
-        Euler angles in radians [rx, ry, rz]
-    """
-    return R.from_matrix(rot_matrix).as_euler('XYZ')
+def rotation_matrix_to_rotvec(rot_matrix: np.ndarray) -> np.ndarray:
+    return R.from_matrix(rot_matrix).as_rotvec()
 
-def apply_delta_rotation(current_euler: np.ndarray, delta_euler: np.ndarray) -> np.ndarray:
+def apply_delta_rotation(current_rotvec: np.ndarray, delta_rotvec: np.ndarray) -> np.ndarray:
     """Apply delta rotation to current rotation using rotation matrices.
     
     For delta EE actions, the delta rotation is defined in the 
@@ -55,25 +34,25 @@ def apply_delta_rotation(current_euler: np.ndarray, delta_euler: np.ndarray) -> 
         R_new = R_current @ R_delta
     
     Args:
-        current_euler: Current Euler angles [rx, ry, rz] in radians
-        delta_euler: Delta Euler angles [drx, dry, drz] in radians
+        current_rotvec: Current rotation vector [rx, ry, rz] in radians
+        delta_rotvec: Delta rotation vector [drx, dry, drz] in radians
     
     Returns:
-        New Euler angles after applying delta rotation
+        New rotation vector after applying delta rotation
     """
     # Convert current rotation to matrix
-    current_rot = euler_to_rotation_matrix(current_euler)
+    current_rot = rotvec_to_rotation_matrix(current_rotvec)
     
     # Convert delta rotation to matrix (small rotation in local frame)
-    delta_rot = euler_to_rotation_matrix(delta_euler)
+    delta_rot = rotvec_to_rotation_matrix(delta_rotvec)
     
     # Apply delta rotation in local frame: R_new = R_current @ R_delta
     new_rot = delta_rot @ current_rot
     
     # Convert back to Euler angles
-    new_euler = rotation_matrix_to_euler(new_rot)
+    new_rotvec = rotation_matrix_to_rotvec(new_rot)
     
-    return new_euler
+    return new_rotvec
 
 def update_latest_symlink(target: Path, link_name: Path):
     """
@@ -372,30 +351,33 @@ class Inference:
             # Get current ee pose as base
             current_ee_pose = self.robot_client.robot_get_ee_pose()  # [x, y, z, rx, ry, rz]
             current_pos = current_ee_pose[:3].copy()
-            current_euler = current_ee_pose[3:6].copy()
+            current_rotvec = current_ee_pose[3:6].copy()
             print(f"[STATE] Initial EE Pose: {current_ee_pose}")
             for i, action in enumerate(actions[:self.action_horizon]):
                 start_time = time.perf_counter()
 
                 # Delta ee action: [delta_x, delta_y, delta_z, delta_rx, delta_ry, delta_rz, gripper]
                 delta_pos = action[:3] * self.ee_action_scale
-                delta_euler = action[3:6] * self.ee_action_scale
-                print(f"[STATE] Delta EE: {delta_pos}, {delta_euler}")
+                delta_rotvec = action[3:6] * self.ee_action_scale
+                print(f"[STATE] Delta EE: {delta_pos}, {delta_rotvec}")
                 # Apply delta position (can be added directly)
                 target_pos = current_pos + delta_pos
                 
                 # Apply delta rotation using rotation matrices
-                target_euler = apply_delta_rotation(current_euler, delta_euler)
+                target_rotvec = apply_delta_rotation(current_rotvec, delta_rotvec)
                 
                 # Combine into target pose
-                target_pose = np.concatenate([target_pos, target_euler])
+                target_pose = np.concatenate([target_pos, target_rotvec])
                 
                 # Move robot to target ee pose
                 self.robot_client.robot_update_desired_ee_pose(target_pose)
                 print(f"[STATE] Target EE Pose: {target_pose}")
                 # Update current pose for next iteration
-                current_pos = target_pos.copy()
-                current_euler = target_euler.copy()
+                # current_pos = target_pos.copy()
+                # current_rotvec = target_rotvec.copy()
+                current_ee_pose = self.robot_client.robot_get_ee_pose()  # [x, y, z, rx, ry, rz]
+                current_pos = current_ee_pose[:3].copy()
+                current_rotvec = current_ee_pose[3:6].copy()
 
                 # Control gripper
                 gripper_command = 0 if action[6] < self.close_threshold else 1
