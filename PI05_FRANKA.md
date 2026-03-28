@@ -293,7 +293,7 @@ The computed state norm is saved in the `norm_stats.json` file in the dataset di
 I collected 50 training trajectories for finetuning the model.
 
 ```python
-OBS_INDICES=1,2,3,4,5,6,7,8 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/train.py pi05_droid_finetune_franka --exp_name=pick_and_place_robotiq_0211 --overwrite
+OBS_INDICES=1,2,3,4,5,6,7,8 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run scripts/train.py pi05_droid_finetune_franka --exp_name=pick_and_place_robotiq_0211 --overwrite
 
 # delta ee
 OBS_INDICES=10,11,12,13,14,15,8 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 python scripts/train.py pi05_droid_finetune_delta_ee_franka --exp_name=pick_and_place_last_dance --overwrite

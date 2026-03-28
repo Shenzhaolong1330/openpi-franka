@@ -10,8 +10,8 @@ from openpi.models import model as _model
 def make_franka_example() -> dict:
     """Creates a random input example for the ur5e policy."""
     return {
-        "observation/state": np.random.rand(8),
-        # "observation/state": np.random.rand(7), # delta ee
+        # "observation/state": np.random.rand(8),
+        "observation/state": np.random.rand(7), # delta ee
         "observation/image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "observation/wrist_image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "prompt": "do something",
@@ -99,7 +99,7 @@ class FrankaOutputs(transforms.DataTransformFn):
         # For Libero, we only return the first 7 actions (since the rest is padding).
         # For your own dataset, replace `7` with the action dimension of your dataset.
         
-        return {"actions": np.asarray(data["actions"][:, :8])}
-        # return {"actions": np.asarray(data["actions"][:, :7])} # delta ee
+        # return {"actions": np.asarray(data["actions"][:, :8])}
+        return {"actions": np.asarray(data["actions"][:, :7])} # delta ee
 
 

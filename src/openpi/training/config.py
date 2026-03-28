@@ -21,6 +21,7 @@ import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.policies.franka_policy as franka_policy
+import openpi.policies.franka_policy_delta_ee as franka_policy_delta_ee
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
@@ -575,8 +576,8 @@ class LeRobotFrankaDeltaEEDataConfig(DataConfigFactory):
         # how to modify the transforms to match your dataset. Once you created your own transforms, you can
         # replace the transforms below with your own.
         data_transforms = _transforms.Group(
-            inputs=[franka_policy.FrankaInputs(model_type=model_config.model_type)],
-            outputs=[franka_policy.FrankaOutputs()],
+            inputs=[franka_policy_delta_ee.FrankaInputs(model_type=model_config.model_type)],
+            outputs=[franka_policy_delta_ee.FrankaOutputs()],
         )
         # One additional data transform: pi0 models are trained on delta actions (relative to the first
         # state in each action chunk). IF your data has ``absolute`` actions (e.g. target joint angles)
@@ -591,7 +592,7 @@ class LeRobotFrankaDeltaEEDataConfig(DataConfigFactory):
         # LIBERO already represents actions as deltas, but we have some old Pi0 checkpoints that are trained with this
         # extra delta transform.
         if self.extra_delta_transform:
-            delta_action_mask = _transforms.make_bool_mask(7, -1)
+            delta_action_mask = _transforms.make_bool_mask(8, -1)
             data_transforms = data_transforms.push(
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
                 outputs=[_transforms.AbsoluteActions(delta_action_mask)],
@@ -1112,7 +1113,7 @@ _CONFIGS = [
         num_train_steps=100_000,
     ),
     TrainConfig(
-        name="pi05_droid_finetune_delta_ee_franka",
+        name="pi05_droid_finetune_franka_delta_ee",
         model=pi0_config.Pi0Config(
             pi05=True, 
             action_horizon=20, 
