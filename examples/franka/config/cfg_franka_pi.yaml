@@ -1,5 +1,5 @@
 model:
-  name: pi05_droid_finetune_delta_ee_franka
+  name: pi05_droid_finetune_franka_delta_ee
   checkpoint_dir: /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_franka_delta_ee/pick_and_place_last_dance/18000
 cameras:
   wrist_cam_serial: "344322074412" # 243222071212 344322074412
