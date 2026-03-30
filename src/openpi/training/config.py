@@ -1224,8 +1224,10 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(
             pi05=True, 
             action_horizon=20, 
-            paligemma_variant="gemma_2b_lora", 
-            action_expert_variant="gemma_300m_lora"
+            # paligemma_variant="gemma_2b_lora", 
+            # action_expert_variant="gemma_300m_lora"
+            paligemma_variant="gemma_2b", 
+            action_expert_variant="gemma_300m"
         ),
         data=LeRobotFrankaDeltaEEDataConfig(
             repo_id="/vepfs-mlp2/c20250510/250303034/workspace/data/pick_and_place_all_merged_last_dance_v3.0",
