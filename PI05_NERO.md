@@ -1,4 +1,174 @@
-# $\pi_{0.5}$ for Franka
+# $\pi_{0.5}$ for NERO Dual-Arm
+In this project, we adapt $\pi_{0.5}$-DROID for the NERO dual-arm robot. The dataset is configured in the format of Lerobot V3.0.
+
+## Env Setup and Installation
+
+### 1. Clone the repository:
+```bash
+git clone --recurse-submodules https://github.com/Shenzhaolong1330/openpi-franka.git
+
+# Or if you already cloned the repo:
+git submodule update --init --recursive
+```
+
+### 2. Add the dependencies you need:
+
+You can add the dependencies you need in the `pyproject.toml` `[project] dependencies` section.
+For NERO, you specifically need:
+```toml
+"pyrealsense2",
+"zerorpc",
+```
+
+As for `lerobot`, you can add in the `[tool.uv.sources]` section. We need to install a proper version of lerobot manually compatible with your dataset.
+```toml
+lerobot = {path = "/path/to/lerobot"}
+```
+
+### 3. Env management
+
+Create a conda environment for this project:
+```bash
+conda create -n openpi-franka python=3.11
+conda activate openpi-franka
+```
+Install `uv` in the conda environment:
+```bash
+pip install uv
+```
+and install the dependencies in the conda environment:
+```bash
+GIT_LFS_SKIP_SMUDGE=1 uv sync
+GIT_LFS_SKIP_SMUDGE=1 uv pip install -e .
+```
+
+## NERO Dual-Arm Recommended Training Schema
+
+This section summarizes the recommended sample structure for the NERO dual-arm robot.
+
+### 1. Recommended training sample structure
+
+#### A. Proprio state
+
+Use a 14D proprioceptive state composed of:
+
+- `left_ee_pose`: 6D
+    - `x`, `y`, `z`
+    - `rz`, `ry`, `rx`
+- `right_ee_pose`: 6D
+    - `x`, `y`, `z`
+    - `rz`, `ry`, `rx`
+- `left_gripper_cmd_bin`: 1D continuous scalar
+- `right_gripper_cmd_bin`: 1D continuous scalar
+
+Notes:
+
+- The current code order is `x, y, z, rz, ry, rx` for each arm.
+- The field name contains `cmd_bin`, but the actual value path is continuous, not strictly binary.
+
+#### B. Action
+
+Use a 14D control vector composed of:
+
+- `left_delta_ee_pose`: 6D Cartesian delta
+    - `x`, `y`, `z`, `rx`, `ry`, `rz`
+- `right_delta_ee_pose`: 6D Cartesian delta
+    - `x`, `y`, `z`, `rx`, `ry`, `rz`
+- `left_gripper_cmd_bin`: 1D continuous scalar
+- `right_gripper_cmd_bin`: 1D continuous scalar
+
+If grippers are not used, the action dimension can be reduced to 12.
+
+### 2. Key semantic notes
+
+| Item | Conclusion |
+| --- | --- |
+| Action semantics | End-effector delta control, not absolute joint position |
+| Control frequency | 50 Hz |
+| Joint space | Not used as the main input/output path in the current training interface |
+| Gripper semantics | Named `cmd_bin`, but the actual path is continuous |
+| Gripper threshold | `close_threshold = 0.05` only applies in binary mode |
+| Gripper max open | `gripper_max_open = 0.1` m |
+| Gripper reverse | Default `False` |
+
+### 3. Camera fields
+
+The camera list is not hardcoded. It comes from `config.cameras`, so the dataset should keep camera names configurable instead of baking in fixed base/wrist names.
+
+Typical documented camera setup:
+
+- `left_wrist_cam_serial`
+- `right_wrist_cam_serial`
+- `head_cam_serial` (or `exterior_cam_serial`)
+
+All images should be stored as RGB with 3 channels.
+
+### 4. Recommended LeRobot schema
+
+#### Observation
+
+- `proprio`: 14D
+- `image`: configurable multi-camera dictionary, each image in `H × W × 3`
+
+#### Action
+
+- 14D continuous control
+- 12D dual-arm end-effector delta
+- 2D gripper continuous command
+
+### 5. Practical mapping for the current openpi pipeline
+
+For the current policy pipeline, the safest mapping is:
+
+- `observation/state` → 14D proprio state
+- `observation/image` / wrist image keys → configurable RGB camera inputs
+- `actions` → 14D delta action vector
+
+This makes NERO compatible with the same policy transform pattern used by Franka, ALOHA, and DROID, while preserving the dual-arm Cartesian delta semantics.
+
+## Compute Norm Stats (Nero)
+
+For computing the state norm representing the full 14D Nero state (Assuming your custom mapping defines 1-14 valid indices):
+```bash
+# NERO dual-arm 14D index mapping
+OBS_INDICES=1,2,3,4,5,6,7,8,9,10,11,12,13,14 uv run scripts/compute_norm_stats.py --config-name pi05_droid_finetune_nero
+```
+The computed state norm is saved in the `norm_stats.json` file in your dataset directory.
+
+## Finetune the Model (Nero)
+
+```bash
+OBS_INDICES=1,2,3,4,5,6,7,8,9,10,11,12,13,14 XLA_PYTHON_CLIENT_MEM_FRACTION=0.95 uv run scripts/train.py pi05_droid_finetune_nero --exp_name=nero_dual_arm_test --overwrite
+```
+
+## Inference the Model (Nero)
+Run the inference interface file directly via:
+[inference_pi_with_nero.py](examples/nero/inference_pi_with_nero.py)
+```bash
+python examples/nero/inference_pi_with_nero.py
+```
+
+---
+
+## Use Lerobot data tools
+
+```bash
+lerobot-edit-dataset \
+    --repo_id milk_shake_merged \
+    --operation.type merge \
+    --operation.repo_ids "['milk_shake_3_19_step1_20260319_v06', 'milk_shake_3_19_step3_20260319_v06']"
+```
+
+## Use Tos
+Get data from tos:
+```bash
+./tosutil cp -r -p 40 -j 50 -nfj 40 tos://c20250510/shenzhaolong/datasets/pick_all_objects_20260208/ workspace/data/robotiq
+```
+
+Send model to tos:
+```bash
+./tosutil cp -r -p 40 -j 50 -nfj 40 /vepfs-mlp2/c20250510/250303034/workspace/openpi-franka/checkpoints/pi05_droid_finetune_franka/pick_and_place_robotiq_0211/55000 tos://c20250510/shenzhaolong/datasets/model/pick_and_place_robotiq_0211/55000
+```# $\pi_{0.5}$ for Franka
 In this project, I finetune $\pi_{0.5}$-DROID on my own Franka dataset, 
 collected by the [lerobot_franka_isoteleop](https://github.com/Shenzhaolong1330/lerobot_franka_isoteleop.git) project. The dataset is in the format of Lerobot V3.0.
 
