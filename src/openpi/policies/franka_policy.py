@@ -8,10 +8,19 @@ from openpi.models import model as _model
 
 
 def make_franka_example() -> dict:
-    """Creates a random input example for the ur5e policy."""
+    """Creates a random input example for the Franka policy (joint mode)."""
     return {
-        "observation/state": np.random.rand(8),
-        # "observation/state": np.random.rand(7), # delta ee
+        "observation/state": np.random.rand(8),  # joint mode: 7 joints + 1 gripper
+        "observation/image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
+        "observation/wrist_image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
+        "prompt": "do something",
+    }
+
+
+def make_franka_delta_ee_example() -> dict:
+    """Creates a random input example for the Franka policy (delta EE mode)."""
+    return {
+        "observation/state": np.random.rand(7),  # delta ee mode: 6 ee pose + 1 gripper
         "observation/image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "observation/wrist_image": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         "prompt": "do something",
