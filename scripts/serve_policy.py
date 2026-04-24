@@ -18,6 +18,16 @@ class EnvMode(enum.Enum):
     ALOHA_SIM = "aloha_sim"
     DROID = "droid"
     LIBERO = "libero"
+    FRANKA_DELTA_EE = "franka_delta_ee"  # Franka delta EE 模式
+    
+    @classmethod
+    def _missing_(cls, value):
+        """Allow case-insensitive matching."""
+        value = value.lower()
+        for member in cls:
+            if member.value == value:
+                return member
+        return None
 
 
 @dataclasses.dataclass
@@ -72,6 +82,11 @@ DEFAULT_CHECKPOINT: dict[EnvMode, Checkpoint] = {
     EnvMode.LIBERO: Checkpoint(
         config="pi05_libero",
         dir="gs://openpi-assets/checkpoints/pi05_libero",
+    ),
+    # 新增：Franka delta EE 模式
+    EnvMode.FRANKA_DELTA_EE: Checkpoint(
+        config="pi05_droid_finetune_franka_delta_ee",
+        dir="/home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_franka_delta_ee/pick_and_place_last_dance_full/65000",
     ),
 }
 
