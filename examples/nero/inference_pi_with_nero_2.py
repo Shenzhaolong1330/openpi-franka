@@ -1,44 +1,25 @@
-import openpi.training.checkpoints
-import openpi.policies.policy_config
-import openpi.training.config as _config
-import openpi.policies.policy_config as _policy_config
-
 import logging
-import time
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+import yaml
 import os
-
-print("[DEBUG] Importing pathlib and typing...", flush=True)
+import time
+import numpy as np
 from pathlib import Path
 from typing import Dict, Any
-
-print("[DEBUG] Importing numpy...", flush=True)
-import numpy as np
-
-print("[DEBUG] Importing yaml...", flush=True)
-import yaml
-
-print("[DEBUG] Importing scipy Rotation...", flush=True)
 from scipy.spatial.transform import Rotation as R
-
-print("[DEBUG] Importing utils and openpi_client...", flush=True)
 from utils import FpsCounter
 from openpi_client import image_tools
 from recorder import Recorder 
-
-print("[DEBUG] Importing lerobot cameras...", flush=True)
+from openpi.training import config as _config
+from openpi.policies import policy_config as _policy_config
 from lerobot.cameras.configs import ColorMode, Cv2Rotation
 from lerobot.cameras.realsense.camera_realsense import RealSenseCameraConfig
 from lerobot.cameras import make_cameras_from_configs
 
-# Import the actual client we just copied from the teleop folder
-print("[DEBUG] Importing NeroDualArmClient...", flush=True)
+# Import the Nero client
 from nero_interface_client import NeroDualArmClient
 
-print("[DEBUG] All top-level imports successful!", flush=True)
-logging.basicConfig(level=logging.INFO, format="%(message)s")
-
-# 获取当前项目根目录 (openpi-franka)
-repo_root = Path(__file__).resolve().parent.parent.parent
+home = Path.home()
 
 def rotvec_to_rotation_matrix(rotation_vector: np.ndarray) -> np.ndarray:
     return R.from_rotvec(rotation_vector).as_matrix()
@@ -48,140 +29,180 @@ def rotation_matrix_to_rotvec(rot_matrix: np.ndarray) -> np.ndarray:
 
 def apply_delta_rotation(current_rotvec: np.ndarray, delta_rotvec: np.ndarray) -> np.ndarray:
     """Apply delta rotation to current rotation using rotation matrices."""
+    # Convert current rotation to matrix
     current_rot = rotvec_to_rotation_matrix(current_rotvec)
+    # Convert delta rotation to matrix
     delta_rot = rotvec_to_rotation_matrix(delta_rotvec)
+    # Apply delta rotation
     new_rot = delta_rot @ current_rot
+    # Convert back to Euler angles
     return rotation_matrix_to_rotvec(new_rot)
 
 def update_latest_symlink(target: Path, link_name: Path):
+    """
+    Update a symlink to point to the latest log file.
+    """
     if link_name.exists() or link_name.is_symlink():
         link_name.unlink()
     os.symlink(target, link_name)
 
 class Inference:
     def __init__(self, config_path: Path):
+        # Load YAML config
         with open(config_path, "r") as f:
             cfg = yaml.safe_load(f)
 
+        # Model config
         model = cfg["model"]
         self.model_config = _config.get_config(model["name"])
         chk_dir = str(model["checkpoint_dir"])
-        self.checkpoint_dir = Path(chk_dir) if chk_dir.startswith("/") else repo_root / chk_dir
+        self.checkpoint_dir = Path(chk_dir) if chk_dir.startswith("/") else home / chk_dir
         
-        # Camera config (3 cameras for complete Nero vision setup)
+        # Camera config (base and two wrists)
         cam = cfg.get("cameras", {})
-        self.left_wrist_cam_serial = str(cam.get("left_wrist_cam_serial", ""))
-        self.right_wrist_cam_serial = str(cam.get("right_wrist_cam_serial", ""))
-        self.exterior_cam_serial = str(cam.get("exterior_cam_serial", ""))
+        self.exterior_cam_serial = cam.get("exterior_cam_serial")
+        self.left_wrist_cam_serial = cam.get("left_wrist_cam_serial")
+        self.right_wrist_cam_serial = cam.get("right_wrist_cam_serial")
         self.cam_fps = cam.get("fps", 30)
 
+        # Video config
         video = cfg.get("video", {"fps": 15, "visualize": True})
         self.video_fps = video.get("fps", 15)
         self.visualize = video.get("visualize", True)
 
+        # Robot config
         robot = cfg.get("robot", {})
         self.robot_ip = robot.get("ip", "127.0.0.1")
         self.robot_port = robot.get("port", 4242)
         self.initial_left_joints = np.asarray(robot.get("initial_left_joints", np.zeros(7)), dtype=np.float32)
         self.initial_right_joints = np.asarray(robot.get("initial_right_joints", np.zeros(7)), dtype=np.float32)
-        self.dry_run = cfg.get("dry_run", False)
         
-        run_cfg = cfg.get("run", {})
-        self.action_fps = run_cfg.get("action_fps", robot.get("action_fps", 20))
-        self.action_horizon = run_cfg.get("action_horizon", robot.get("action_horizon", 10))
+        self.action_fps = cfg.get("run", {}).get("action_fps", robot.get("action_fps", 20))
+        self.action_horizon = cfg.get("run", {}).get("action_horizon", robot.get("action_horizon", 10))
 
+        # Gripper config
         gripper = cfg.get("gripper", {})
         self.close_threshold = gripper.get("close_threshold", 0.05)
         self.gripper_force = gripper.get("gripper_force", 10.0)
         self.gripper_speed = gripper.get("gripper_speed", 0.1)
         self.gripper_reverse = gripper.get("gripper_reverse", False)
 
+        # Action mode config
         action_mode = cfg.get("action_mode", {})
         self.action_mode = action_mode.get("mode", "delta_ee")
         self.ee_action_scale = action_mode.get("ee_action_scale", 1.0)
 
-        task = cfg.get("task", {"description": run_cfg.get("task_description", "pick and place")})
-        self.task_description = task.get("description", "pick and place")
+        # Task config
+        task = cfg.get("task", {})
+        self.task_description = task.get("description", cfg.get("run", {}).get("task_description", "pick and place"))
         
+        # time stamps
         time_str = time.strftime('%Y%m%d-%H%M%S')
         time_path = time.strftime('%Y%m%d')
 
+        # base dir
         base_dir = Path(__file__).parent
         log_dir = base_dir / "logs"
         video_dir = base_dir / "videos" / time_path
 
+        # create dir
         (log_dir / "all_logs").mkdir(parents=True, exist_ok=True)
         video_dir.mkdir(parents=True, exist_ok=True)
 
+        # log paths
         latest_path = log_dir / "latest.yaml"
         log_path = log_dir / "all_logs" / f"log_{time_str}.yaml"
 
+        # video paths
+        exterior_video = video_dir / f"{self.task_description.replace(' ', '_')}_exterior_{time_str}.mp4"
         left_wrist_video = video_dir / f"{self.task_description.replace(' ', '_')}_left_wrist_{time_str}.mp4"
         right_wrist_video = video_dir / f"{self.task_description.replace(' ', '_')}_right_wrist_{time_str}.mp4"
-        exterior_video = video_dir / f"{self.task_description.replace(' ', '_')}_exterior_{time_str}.mp4"
 
-        self.recorder = Recorder(log_path=log_path, video_path=[left_wrist_video, right_wrist_video, exterior_video], display_fps=self.video_fps, visualize=self.visualize)
+        # Recorder  
+        self.recorder = Recorder(log_path=log_path, video_path=[exterior_video, left_wrist_video, right_wrist_video], display_fps=self.video_fps, visualize=self.visualize)
         
+        # create symlink to latest log
         update_latest_symlink(log_path, latest_path)
+
+        # create FPS counters
         self.fps_action = FpsCounter(name="action")
+
+        # Internal states
         self.robot_client = None
         self.cameras = None
 
     # --------------------------- ROBOT --------------------------- #
     def connect_robot(self):
-        """Connect to Nero dual-arm robot."""
-        if self.dry_run:
-            logging.info("[DUMMY] Dry run: Skipping robot connection.")
-            return
-
+        """Connect to Nero dual-arm robot and print current state."""
         try:
-            logging.info(f"\n===== [ROBOT] Connecting to Nero dual-arm robot at {self.robot_ip}:{self.robot_port} =====")
+            logging.info("\n===== [ROBOT] Connecting to Nero dual-arm robot =====")
             self.robot_client = NeroDualArmClient(ip=self.robot_ip, port=self.robot_port)
-            if self.robot_client.server is None:
-                raise ConnectionError("Server connection failed.")
 
-            left_pose = self.robot_client.left_robot_get_ee_pose()
-            right_pose = self.robot_client.right_robot_get_ee_pose()
-            lgrip = self.robot_client.left_gripper_get_state().get("width", 0.0)
-            rgrip = self.robot_client.right_gripper_get_state().get("width", 0.0)
+            # Left Arm State
+            left_pose = self.robot_client.left_robot_get_ee_pose().tolist()
+            l_grip = self.robot_client.left_gripper_get_state().get("width", 0.0)
+            formatted_left = [round(x, 4) for x in left_pose]
+            logging.info(f"[ROBOT] Current Left TCP pose: {formatted_left} | Gripper: {l_grip:.4f}")
 
-            logging.info(f"[STATE] Left Arm Pose: {left_pose[:3]} | R: {left_pose[3:]}")
-            logging.info(f"[STATE] Right Arm Pose: {right_pose[:3]} | R: {right_pose[3:]}")
-            logging.info(f"[STATE] Left Gripper width: {lgrip} | Right Gripper width: {rgrip}")
+            # Right Arm State
+            right_pose = self.robot_client.right_robot_get_ee_pose().tolist()
+            r_grip = self.robot_client.right_gripper_get_state().get("width", 0.0)
+            formatted_right = [round(x, 4) for x in right_pose]
+            logging.info(f"[ROBOT] Current Right TCP pose: {formatted_right} | Gripper: {r_grip:.4f}")
+
             logging.info("===== [ROBOT] Nero initialized successfully =====\n")
+
         except Exception as e:
-            logging.error(f"===== [ERROR] Failed to connect to Nero robot: {e} =====")
+            logging.error("===== [ERROR] Failed to connect to Nero robot =====")
+            logging.error(f"Exception: {e}\n")
+            exit(1)
 
     # --------------------------- CAMERAS --------------------------- #
     def connect_cameras(self):
         """Initialize and connect RealSense cameras."""
-        if self.dry_run:
-            logging.info("[DUMMY] Dry run: Skipping camera connection.")
-            return
-
         try:
-            logging.info("\n===== [CAMERAS] Connecting to Realsense Cameras =====")
-            configs = {}
+            logging.info("\n===== [CAM] Initializing cameras =====")
+            
+            camera_config = {}
             if self.exterior_cam_serial:
-                configs["exterior_image"] = RealSenseCameraConfig(serial_number_or_name=self.exterior_cam_serial, fps=self.cam_fps, color_mode=ColorMode.RGB)
+                camera_config["exterior_image"] = RealSenseCameraConfig(
+                    serial_number_or_name=self.exterior_cam_serial,
+                    fps=self.cam_fps, width=640, height=480, color_mode=ColorMode.RGB,
+                    use_depth=False, rotation=Cv2Rotation.NO_ROTATION,
+                )
             if self.left_wrist_cam_serial:
-                configs["left_wrist_image"] = RealSenseCameraConfig(serial_number_or_name=self.left_wrist_cam_serial, fps=self.cam_fps, color_mode=ColorMode.RGB)
+                camera_config["left_wrist_image"] = RealSenseCameraConfig(
+                    serial_number_or_name=self.left_wrist_cam_serial,
+                    fps=self.cam_fps, width=640, height=480, color_mode=ColorMode.RGB,
+                    use_depth=False, rotation=Cv2Rotation.NO_ROTATION,
+                )
             if self.right_wrist_cam_serial:
-                configs["right_wrist_image"] = RealSenseCameraConfig(serial_number_or_name=self.right_wrist_cam_serial, fps=self.cam_fps, color_mode=ColorMode.RGB)
+                camera_config["right_wrist_image"] = RealSenseCameraConfig(
+                    serial_number_or_name=self.right_wrist_cam_serial,
+                    fps=self.cam_fps, width=640, height=480, color_mode=ColorMode.RGB,
+                    use_depth=False, rotation=Cv2Rotation.NO_ROTATION,
+                )
 
-            if configs:
-                self.cameras = make_cameras_from_configs(configs)
+            if camera_config:
+                self.cameras = make_cameras_from_configs(camera_config)
                 for name, cam in self.cameras.items():
                     cam.connect()
-                logging.info(f"[CAMERAS] Connected: {list(configs.keys())}")
+                    logging.info(f"[CAM] {name} connected successfully.")
+                logging.info("===== [CAM] Cameras initialized successfully =====\n")
             else:
-                logging.error("[CAMERAS] No cameras configured in config file")
+                logging.error("[ERROR] No cameras configured.")
+                self.cameras = None
+
         except Exception as e:
-            logging.error(f"===== [ERROR] Failed to connect to cameras: {e} =====")
+            logging.error("[ERROR] Failed to initialize cameras.")
+            logging.error(f"Exception: {e}\n")
+            self.cameras = None
 
     # --------------------------- OBS TRANSFER --------------------------- #
     def _transfer_obs_state(self, obs: Dict[str, Any]) -> Dict[str, Any]:
-        # -> 14D
+        """Transfer raw observation state to policy format."""
+
+        # 14D State for Dual Arm
         state = np.concatenate((
             np.asarray(obs["left_ee_pose"], dtype=np.float32),
             np.asarray(obs["right_ee_pose"], dtype=np.float32),
@@ -189,22 +210,37 @@ class Inference:
             np.asarray([obs["right_gripper_position"]], dtype=np.float32),
         ))
 
-        ext = image_tools.resize_with_pad(obs.get("exterior_image", np.zeros((480, 640, 3), dtype=np.uint8)), 224, 224)
-        lw = image_tools.resize_with_pad(obs.get("left_wrist_image", np.zeros((480, 640, 3), dtype=np.uint8)), 224, 224)
-        rw = image_tools.resize_with_pad(obs.get("right_wrist_image", np.zeros((480, 640, 3), dtype=np.uint8)), 224, 224)
+        ext_img = obs.get("exterior_image", np.zeros((480, 640, 3), dtype=np.uint8))
+        lw_img = obs.get("left_wrist_image", np.zeros((480, 640, 3), dtype=np.uint8))
+        rw_img = obs.get("right_wrist_image", np.zeros((480, 640, 3), dtype=np.uint8))
 
-        return {
+        nero_obs = {
             "observation/state": state,
-            "observation/image": image_tools.convert_to_uint8(ext),
-            "observation/wrist_image": image_tools.convert_to_uint8(lw),
-            "observation/right_wrist_image": image_tools.convert_to_uint8(rw),
+            "observation/image": image_tools.convert_to_uint8(
+                image_tools.resize_with_pad(ext_img, 224, 224)
+            ),
+            "observation/wrist_image": image_tools.convert_to_uint8(
+                image_tools.resize_with_pad(lw_img, 224, 224)
+            ),
+            "observation/right_wrist_image": image_tools.convert_to_uint8(
+                image_tools.resize_with_pad(rw_img, 224, 224)
+            ),
             "prompt": obs.get("prompt", ""),
         }
 
+        # Handle keys as recommended in Nero user memory constraints
+        nero_obs["base_0_rgb"] = nero_obs["observation/image"]
+        nero_obs["left_wrist_0_rgb"] = nero_obs["observation/wrist_image"]
+        nero_obs["right_wrist_0_rgb"] = nero_obs["observation/right_wrist_image"]
+
+        return nero_obs
+
     # --------------------------- OBS STATE --------------------------- #
     def get_obs_state(self) -> Dict[str, Any]:
+        """Return current observation from robot."""
         obs = {}
 
+        # Robot state
         if self.robot_client:
             obs["left_ee_pose"] = self.robot_client.left_robot_get_ee_pose()
             obs["right_ee_pose"] = self.robot_client.right_robot_get_ee_pose()
@@ -222,34 +258,35 @@ class Inference:
             obs["left_gripper_position"] = 0.0
             obs["right_gripper_position"] = 0.0
 
+        # Camera images
         if self.cameras:
             for name, cam in self.cameras.items():
                 obs[name] = cam.read()
         else:
-            img = np.random.randint(0, 256, (480, 640, 3), dtype=np.uint8)
-            obs["exterior_image"] = img
-            obs["left_wrist_image"] = img
-            obs["right_wrist_image"] = img
+            dummy_img = np.zeros((480, 640, 3), dtype=np.uint8)
+            obs["exterior_image"] = dummy_img
+            obs["left_wrist_image"] = dummy_img
+            obs["right_wrist_image"] = dummy_img
 
-        obs["prompt"] = self.task_description
-
+        # Task description    
+        if self.task_description:
+            obs["prompt"] = self.task_description
+        
         return self._transfer_obs_state(obs)
 
     # --------------------------- ACTION EXECUTION --------------------------- #
-    def execute_actions(self, actions: np.ndarray):
-        if self.dry_run:
-            logging.info("[DUMMY] Executed 14D Action Block.")
-            return
-
+    def execute_actions(self, actions: np.ndarray, block: bool = False):
+        """Execute the inferenced actions from the model."""
         if self.robot_client is None:
+            logging.error("[ERROR] Robot controller not connected. Cannot execute actions.")
             return
-
+        
         if self.action_mode == "delta_ee":
-            self._execute_delta_ee_actions(actions)
+            self._execute_delta_ee_actions(actions, block)
         else:
             logging.error(f"[ERROR] Unsupported action mode {self.action_mode} for NERO.")
 
-    def _execute_delta_ee_actions(self, actions: np.ndarray):
+    def _execute_delta_ee_actions(self, actions: np.ndarray, block: bool = False):
         """Execute delta end-effector actions on dual arm.
         Action format (14D): [l_dx, l_dy, l_dz, l_drx, l_dry, l_drz,
                               r_dx, r_dy, r_dz, r_drx, r_dry, r_drz,
@@ -260,7 +297,7 @@ class Inference:
         cur_l_pos, cur_l_rot = cur_left_ee[:3].copy(), cur_left_ee[3:6].copy()
         cur_r_pos, cur_r_rot = cur_right_ee[:3].copy(), cur_right_ee[3:6].copy()
 
-        for action in actions[:self.action_horizon]:
+        for i, action in enumerate(actions[:self.action_horizon]):
             start_time = time.perf_counter()
 
             # Left Arm Deltas
@@ -271,6 +308,7 @@ class Inference:
             d_r_pos, d_r_rot = action[6:9] * self.ee_action_scale, action[9:12] * self.ee_action_scale
             tgt_r_pose = np.concatenate([cur_r_pos + d_r_pos, apply_delta_rotation(cur_r_rot, d_r_rot)])
 
+            # Move arms
             self.robot_client.servo_p("left_robot", tgt_l_pose, delta=False)
             self.robot_client.servo_p("right_robot", tgt_r_pose, delta=False)
 
@@ -296,55 +334,51 @@ class Inference:
 
     # --------------------------- PIPELINE --------------------------- #
     def run(self):
+        """Main pipeline: connect robot, cameras, load policy, execute loop."""
         logging.info("========== Starting Inference Pipeline ==========")
-        print("[DEBUG] Connecting to robot...", flush=True)
         self.connect_robot()
-        print("[DEBUG] Connecting to cameras...", flush=True)
         self.connect_cameras()
-
+        
+        # Initial robot position
         if self.robot_client:
-            print("[DEBUG] Moving robots to initial joints...", flush=True)
             if np.any(self.initial_left_joints):
+                logging.info("[STATE] Moving left robot to initial pose...")
                 self.robot_client.left_robot_move_to_joint_positions(self.initial_left_joints)
             if np.any(self.initial_right_joints):
+                logging.info("[STATE] Moving right robot to initial pose...")
                 self.robot_client.right_robot_move_to_joint_positions(self.initial_right_joints)
 
-            print("[DEBUG] Closing grippers...", flush=True)
             self.robot_client.left_gripper_goto(width=0.0801, force=self.gripper_force)
             self.robot_client.right_gripper_goto(width=0.0801, force=self.gripper_force)
         
-        print("[DEBUG] Fetching first observation state...", flush=True)
         obs = self.get_obs_state()
-        logging.info(f"[STATE] Observation mapped keys: {obs.keys()}")
+        logging.info(f"[STATE] Observation state mapped keys: {obs.keys()}")
         
-        print(f"[DEBUG] Creating trained policy from {self.checkpoint_dir}...", flush=True)
+        # Policy
         policy = _policy_config.create_trained_policy(self.model_config, self.checkpoint_dir)
         logging.info("Warming up the model...")
         start = time.time()
-        print("[DEBUG] Running policy warmup...", flush=True)
         policy.infer(obs)
-        print("[DEBUG] Warmup finished!", flush=True)
         logging.info(f"Model warmup completed, took {time.time() - start:.2f}s")
         
         infer_time = 1
         logging.info("========== Starting Inference Loop ==========")
         try:
             while True:
-                t0 = time.perf_counter()
+                start_time = time.perf_counter()
                 obs = self.get_obs_state()
                 result = policy.infer(obs)
                 self.execute_actions(result["actions"])
                 self.recorder.submit_actions(result["actions"][:self.action_horizon], infer_time, obs.get("prompt", ""))
                 self.recorder.submit_obs(obs)
-                
-                logging.info(f"[STATE] Loop rate: {1 / (time.perf_counter() - t0):.1f} HZ")
+                end_time = time.perf_counter()
+                logging.info(f"[STATE] Inference loop rate: {1 / (end_time - start_time):.1f} HZ")
                 infer_time += 1
         except KeyboardInterrupt:
-            logging.info("[INFO] KeyboardInterrupt detected. Stopping.")
+            logging.info("\n[INFO] KeyboardInterrupt detected. Stopping.")
         except Exception as e:
-            logging.error(f"[ERROR] Loop error: {e}")
-            raise e
-            
+            logging.error(f"[ERROR] Inference loop encountered an error: {e}")
+
         try:
             ans = input("Save recorded videos before exiting? [Y/n]: ").strip().lower()
             if ans in ("", "y", "yes"):
@@ -356,7 +390,10 @@ class Inference:
 
         finally:
             if self.robot_client:
-                self.robot_client.close()
+                try:
+                    self.robot_client.close()
+                except AttributeError:
+                    pass
             if self.cameras:
                 for name, cam in self.cameras.items():
                     cam.disconnect()
@@ -367,5 +404,6 @@ def main():
     inference = Inference(config_path)
     inference.run()
 
+# --------------------------- ENTRY POINT --------------------------- #
 if __name__ == "__main__":
     main()

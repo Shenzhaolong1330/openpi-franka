@@ -1,10 +1,11 @@
-dry_run: true
+dry_run: True
 
 model:
   # Must exist in src/openpi/training/config.py
-  name: pi05_nero
-  # Replace with your real checkpoint path.
-  checkpoint_dir: /path/to/checkpoint
+  name: pi05_droid_finetune_nero
+  # Local checkpoint root or leaf checkpoint directory.
+  # The runtime will auto-resolve the latest saved checkpoint if a parent directory is provided.
+  checkpoint_dir: checkpoints/23000
 
 run:
   action_fps: 20
