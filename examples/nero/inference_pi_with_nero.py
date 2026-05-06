@@ -147,15 +147,16 @@ class Inference:
             logging.info("\n===== [CAMERAS] Connecting to Realsense Cameras =====")
             configs = {}
             if self.exterior_cam_serial:
-                configs["exterior_image"] = RealSenseCameraConfig(camera_index=self.exterior_cam_serial, fps=self.cam_fps, color_mode=ColorMode.RGB)
+                configs["exterior_image"] = RealSenseCameraConfig(serial_number_or_name=self.exterior_cam_serial, fps=self.cam_fps, color_mode=ColorMode.RGB)
             if self.left_wrist_cam_serial:
-                configs["left_wrist_image"] = RealSenseCameraConfig(camera_index=self.left_wrist_cam_serial, fps=self.cam_fps, color_mode=ColorMode.RGB)
+                configs["left_wrist_image"] = RealSenseCameraConfig(serial_number_or_name=self.left_wrist_cam_serial, fps=self.cam_fps, color_mode=ColorMode.RGB)
             if self.right_wrist_cam_serial:
-                configs["right_wrist_image"] = RealSenseCameraConfig(camera_index=self.right_wrist_cam_serial, fps=self.cam_fps, color_mode=ColorMode.RGB)
+                configs["right_wrist_image"] = RealSenseCameraConfig(serial_number_or_name=self.right_wrist_cam_serial, fps=self.cam_fps, color_mode=ColorMode.RGB)
 
             if configs:
                 self.cameras = make_cameras_from_configs(configs)
-                self.cameras.connect()
+                for name, cam in self.cameras.items():
+                    cam.connect()
                 logging.info(f"[CAMERAS] Connected: {list(configs.keys())}")
             else:
                 logging.error("[CAMERAS] No cameras configured in config file")
@@ -191,8 +192,14 @@ class Inference:
         if self.robot_client:
             obs["left_ee_pose"] = self.robot_client.left_robot_get_ee_pose()
             obs["right_ee_pose"] = self.robot_client.right_robot_get_ee_pose()
-            obs["left_gripper_position"] = self.robot_client.left_gripper_get_state().get("width", 0.0)
-            obs["right_gripper_position"] = self.robot_client.right_gripper_get_state().get("width", 0.0)
+            
+            l_grip_width = self.robot_client.left_gripper_get_state().get("width", 0.0)
+            l_grip_state = max(0.0, min(1.0, l_grip_width/0.0801))
+            obs["left_gripper_position"] = 0.0 if l_grip_state < self.close_threshold else 1.0
+            
+            r_grip_width = self.robot_client.right_gripper_get_state().get("width", 0.0)
+            r_grip_state = max(0.0, min(1.0, r_grip_width/0.0801))
+            obs["right_gripper_position"] = 0.0 if r_grip_state < self.close_threshold else 1.0
         else:
             obs["left_ee_pose"] = np.zeros(6, dtype=np.float32)
             obs["right_ee_pose"] = np.zeros(6, dtype=np.float32)
@@ -200,10 +207,8 @@ class Inference:
             obs["right_gripper_position"] = 0.0
 
         if self.cameras:
-            frames = self.cameras.read()
-            for k in ["exterior_image", "left_wrist_image", "right_wrist_image"]:
-                if k in frames:
-                    obs[k] = frames[k]
+            for name, cam in self.cameras.items():
+                obs[name] = cam.read()
         else:
             img = np.random.randint(0, 256, (480, 640, 3), dtype=np.uint8)
             obs["exterior_image"] = img
@@ -305,7 +310,7 @@ class Inference:
                 obs = self.get_obs_state()
                 result = policy.infer(obs)
                 self.execute_actions(result["actions"])
-                self.recorder.submit_actions(result["actions"], infer_time, obs.get("prompt", ""))
+                self.recorder.submit_actions(result["actions"][:self.action_horizon], infer_time, obs.get("prompt", ""))
                 self.recorder.submit_obs(obs)
                 
                 logging.info(f"[STATE] Loop rate: {1 / (time.perf_counter() - t0):.1f} HZ")
@@ -315,11 +320,22 @@ class Inference:
         except Exception as e:
             logging.error(f"[ERROR] Loop error: {e}")
             raise e
+            
+        try:
+            ans = input("Save recorded videos before exiting? [Y/n]: ").strip().lower()
+            if ans in ("", "y", "yes"):
+                logging.info("[INFO] Saving recorded videos before exiting...")
+                self.recorder.save_video()
+                
+        except Exception as e:
+            logging.error(f"[ERROR] Failed to save videos: {e}")
+
         finally:
             if self.robot_client:
                 self.robot_client.close()
             if self.cameras:
-                self.cameras.disconnect()
+                for name, cam in self.cameras.items():
+                    cam.disconnect()
 
 # --------------------------- MAIN --------------------------- #
 def main():

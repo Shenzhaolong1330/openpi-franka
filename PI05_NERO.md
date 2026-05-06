@@ -581,3 +581,95 @@ For the current policy pipeline, the safest mapping is:
 - `actions` → 14D delta action vector
 
 This makes NERO compatible with the same policy transform pattern used by Franka, ALOHA, and DROID, while preserving the dual-arm Cartesian delta semantics.
+
+
+ffmpeg version 
+这个报错的根本原因主要有两个层面：
+
+### 根本原因解释：
+
+1. **FFmpeg 版本降得太低了：**
+   昨天我们为了绕过 FFmpeg v8，执行了 `conda install "ffmpeg<8"` 命令。但这导致 Conda 矫枉过正，居然安装了非常古老的 **`ffmpeg 2.8.6`** 版本。从您的报错记录中可以看到这段提示：
+   ```text
+   FFmpeg version 7: libavutil.so.59: cannot open shared object file...
+   FFmpeg version 6: libavutil.so.58: cannot open shared object file...
+   FFmpeg version 5: libavutil.so.57: cannot open shared object file...
+   FFmpeg version 4: libavutil.so.56: cannot open shared object file...
+   ```
+   `torchcodec` （深度学习视频解码库）明确只支持 **FFmpeg 4, 5, 6, 和 7**（对应的动态链接库是 `libavutil.so.56` 到 `.59`）。我们装的 2.8.6 版本不在这四个受支持的版本范围内，所以依然找不到兼容的 `.so` 文件。
+
+2. **运行时丢失了 Conda 动态库路径 (`LD_LIBRARY_PATH`)：**
+   在您刚刚运行的命令中：
+   `export OBS_INDICES="..." && export VIDEO_BACKEND=none && uv run train.py ...`
+   **缺少了指向 miniforge3 的库路径环境变量**。由于 FFmpeg 是通过 conda 安装在您的用户目录下的，如果不显式指定 `LD_LIBRARY_PATH`，Python (uv) 依然只会在系统的默认路径（如 lib）寻找，从而无法找到刚安装的解码库。
+
+---
+
+### 解决办法：
+
+需要分两步走：首先安装正确的 FFmpeg 6 或 7，然后在运行前确保加入 `LD_LIBRARY_PATH`。
+
+**第一步：安装正确受支持的 FFmpeg 版本 (以 v6 为例)**
+请在终端中运行以下命令重装受支持范围的 ffmpeg：
+```bash
+conda install -y -c https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/conda-forge/ "ffmpeg>=6,<8"
+```
+
+**第二步：带上完整的环境变量重新运行训练**
+重新运行训练时，务必带上 `LD_LIBRARY_PATH`：
+```bash
+export LD_LIBRARY_PATH=/home/deepcybo/miniforge3/lib:$LD_LIBRARY_PATH && export OBS_INDICES="1,2,3,4,5,6,7,8,9,10,11,12,13,14" && export VIDEO_BACKEND=none && uv run scripts/train.py pi05_droid_finetune_nero --exp_name test_run --overwrite --no-wandb_enabled
+```
+
+
+Ran terminal command:  find /home/deepcybo/Workspace_openpi/openpi-franka -name "params" -type d
+
+Ran terminal command:  ls -la /vepfs-mlp2/c20250510/250303034/workspace/model/openpi/openpi-assets/checkpoints/pi05_droid/params
+Completed with input:  ls -la /vepfs-mlp2/c20250510/250303034/workspace/model/openpi/openpi-assets/checkpoints/pi05_droid/params
+
+Ran terminal command:  ls -la /home/deepcybo/Workspace_openpi
+
+Ran terminal command:  find /home/deepcybo/Workspace_openpi/openpi-franka/scripts/checkpoints -type f
+
+Ran terminal command:  cat /home/deepcybo/Workspace_openpi/openpi-franka/README.md | grep -i weight -C 3
+
+Ran terminal command:  cat /home/deepcybo/Workspace_openpi/openpi-franka/src/openpi/training/weight_loaders.py | grep -i gs:// -C 3
+
+Ran terminal command:  cat /home/deepcybo/Workspace_openpi/openpi-franka/src/openpi/shared/download.py
+
+Ran terminal command:  ls -la ~/.cache/openpi/openpi-assets/checkpoints
+
+Ran terminal command:  ls -la ~/.cache/openpi/openpi-assets/checkpoints/pi05_droid
+
+Ran terminal command:  du -sh ~/.cache/openpi/openpi-assets/checkpoints/pi05_droid/params.partial
+
+Ran terminal command:  ls -la ~/.cache/openpi/openpi-assets/checkpoints/
+
+Ran terminal command:  ls -la /home/deepcybo/Workspace_openpi/openpi-franka/scripts/checkpoints
+
+Ran terminal command:  ls -la /home/deepcybo/Workspace_openpi/openpi-franka/scripts/checkpoints/pi05_droid_finetune_nero
+
+Ran terminal command:  ls -la /home/deepcybo/Workspace_openpi/openpi-franka/scripts/checkpoints/pi05_droid_finetune_nero/nero_smoke
+
+目前你的本地项目中**还没有可以完整使用的权重**。
+
+我为你检查了系统目录，发现以下情况：
+
+1. **自定义本地路径无法访问**：其他配置里写的类似 `/vepfs-mlp2/...` 或者 `/path/to/your/pytorch_weight_path` 的本地路径在你的机器和工作区中并不存在。
+2. **官方权重正在自动下载/或已中断**：你在 `config.py` 中写了 `weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params")`。代码底层自带了下载逻辑，所以当你启动训练时，它会自动从 Google Cloud 下载基座模型文件。
+但我检查了系统的缓存目录 `~/.cache/openpi/openpi-assets/checkpoints/pi05_droid/`，里面仅仅只有一个大小约 584MB、名为 `params.partial` 的半成品（而且有 `.lock` 文件）。这说明**上次下载未完成被中断了**（或者是此时后台正在缓慢下载）。
+3. **历史训练检查点**：你本地的 nero_smoke 输出文件夹当前是空的。
+
+### 怎么让它可用？
+
+既然代码支持自动下载，如果你之前卡住了或者中断了，建议你先**清理掉未完成的下载碎片**，然后直接重新运行训练命令，让代码自动把完整权重拉下来：
+
+1. 在终端清理未完成的下载：
+   ```bash
+   rm -rf ~/.cache/openpi/openpi-assets/checkpoints/pi05_droid/params*
+   ```
+2. 保持网络畅通，重新启动测试（首次启动时间可能会因为下载量大而稍长）：
+   ```bash
+   python scripts/train.py pi05_droid_finetune_nero --exp_name test_run
+   ```
+
