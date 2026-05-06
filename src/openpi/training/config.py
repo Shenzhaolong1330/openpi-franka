@@ -1156,22 +1156,37 @@ _CONFIGS = [
             action_expert_variant="gemma_300m_lora"
         ),
         data=LeRobotNeroDataConfig(
-            repo_id="/vepfs-mlp2/c20250510/250303034/workspace/data/robotiq/pick_all_objects_20260208", # Will need user to change this
+            repo_id="/home/deepcybo/Workspace_openpi/Openpi_data/2mL_empty_merged_20260424",
+            assets=AssetsConfig(
+                assets_dir="/home/deepcybo/Workspace_openpi/openpi-franka/checkpoints/pi05_droid/assets",
+                asset_id="droid",
+            ),
             base_config=DataConfig(prompt_from_task=False, action_sequence_keys=("action",)),
             extra_delta_transform=False,
             action_dim=14,  # Changed back to 14D (6+6+1+1) to match NERO's schema
         ),
         batch_size=64,
+        fsdp_devices=8,
+        num_workers=4,
+
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=1e-5,
+            decay_steps=50_000,
+            decay_lr=1e-6,
+        ),
+
         freeze_filter=pi0_config.Pi0Config(
             paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
         ).get_freeze_filter(),
         # Turn off EMA for LoRA finetuning.
         ema_decay=None,
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
-        weight_loader=weight_loaders.CheckpointWeightLoader("/vepfs-mlp2/c20250510/250303034/workspace/model/openpi/openpi-assets/checkpoints/pi05_droid/params"),
-        pytorch_weight_path="/path/to/your/pytorch_weight_path",
-        num_train_steps=100_000,
+        weight_loader=weight_loaders.CheckpointWeightLoader("/home/deepcybo/Workspace_openpi/openpi-franka/checkpoints/pi05_droid/params"),
+        pytorch_weight_path=None,
+        num_train_steps=50_000,
     ),
+    
     TrainConfig(
         name="pi05_droid_finetune_franka",
         model=pi0_config.Pi0Config(
