@@ -1,0 +1,42 @@
+model:
+  name: pi05_droid_finetune_dual_franka
+  checkpoint_dir: /vepfs-mlp2/c20250510/250303034/workspace/openpi-franka/checkpoints/pi05_droid_finetune_dual_franka/my_experiment/20000
+cameras:
+  left_wrist_cam_serial: "344322074412"  # Update with your left wrist camera serial
+  right_wrist_cam_serial: "243222071212"  # Update with your right wrist camera serial
+  exterior_cam_serial: "243322071821"     # Update with your head/exterior camera serial
+  fps: 30
+
+video:
+  fps: 7
+  visualize: true
+
+robot:
+  ip: 192.168.110.15
+  port: 4242
+  # Initial poses for both arms (7 joint positions each)
+  left_initial_pose: [0.00761213, -0.39547789, -0.03788094, -2.44777918, 0.09107678, 1.99305379, -1.65751863]
+  right_initial_pose: [-0.00761213, -0.39547789, 0.03788094, -2.44777918, -0.09107678, 1.99305379, 1.65751863]
+  action_fps: 20
+  action_horizon: 10
+
+gripper:
+  close_threshold: 0.7
+  gripper_force: 10
+  gripper_speed: 0.1
+  gripper_reverse: false
+
+# Action mode configuration for dual franka
+# Dual franka uses delta_ee mode with 14D actions:
+# - 6D left arm delta EE pose
+# - 6D right arm delta EE pose
+# - 1D left gripper command
+# - 1D right gripper command
+action_mode:
+  mode: delta_ee
+  ee_action_scale: 1.0  # scale factor for delta ee actions
+
+task:
+  description: Pick up all the objects into the basket and seal the basket.
+
+  # Task description for the policy

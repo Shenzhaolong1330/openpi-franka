@@ -114,10 +114,10 @@ Get data from tos:
 
 Send model to tos:
 ```bash
-./tosutil cp -r -p 40 -j 50 -nfj 40 /vepfs-mlp2/c20250510/250303034/workspace/openpi-franka/checkpoints/pi05_droid_finetune_franka/pick_and_place_robotiq_0211/55000 tos://c20250510/shenzhaolong/datasets/model/pick_and_place_robotiq_0211/55000
+./tosutil cp -r -p 40 -j 50 -nfj 40 /vepfs-mlp2/c20250510/250303034/workspace/openpi-franka/checkpoints/pi05_droid_finetune_dual_franka/pi4dualfranka/45000 tos://c20250510/shenzhaolong/model/pi05_droid_finetune_dual_franka/pi4dualfranka/45000
 ```
 
 Get model from tos:
 ```bash
-tosutil cp -r -p 40 -j 50 -nfj 40 tos://c20250510/shenzhaolong/datasets/model/pick_and_place_robotiq_0211/55000 /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_franka/pick_and_place_robotiq
+tosutil cp -r -p 40 -j 50 -nfj 40 tos://c20250510/shenzhaolong/model/pi05_droid_finetune_dual_franka/pi4dualfranka/45000 /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_dual_franka/pi4dualfranka
 ```

@@ -23,6 +23,7 @@ import openpi.policies.libero_policy as libero_policy
 import openpi.policies.franka_policy as franka_policy
 import openpi.policies.franka_policy_delta_ee as franka_policy_delta_ee
 import openpi.policies.nero_policy as nero_policy
+import openpi.policies.dual_franka_policy as dual_franka_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
@@ -680,6 +681,79 @@ class LeRobotNeroDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotDualFrankaDataConfig(DataConfigFactory):
+    """Data config for custom dual arm Franka datasets in LeRobot format.
+
+    Dual Franka schema:
+    - state: 30D raw (14D joint pos + 12D EE pose + 4D gripper)
+      Reordered to 28D: [left_joint(7), right_joint(7), left_ee(6), right_ee(6), left_gripper(1), right_gripper(1)]
+      Then padded to action_dim (32) by PadStatesAndActions.
+    - action: 14D (12D delta EE pose + 2D gripper command)
+    - cameras: head_image, left_wrist_image, right_wrist_image
+    """
+
+    # Dual Franka actions are already delta EE, so no extra delta transform needed.
+    extra_delta_transform: bool = False
+    # Actual action dimension from dataset: 12D EE (6 left + 6 right) + 2D gripper = 14D
+    action_dim: int = 14
+    action_sequence_keys: Sequence[str] = ("action",)
+
+    # Source keys in the LeRobot sample.
+    state_source_key: str = "observation.state"
+    base_image_source_key: str = "observation.images.head_image"
+    left_wrist_image_source_key: str = "observation.images.left_wrist_image"
+    right_wrist_image_source_key: str = "observation.images.right_wrist_image"
+    actions_source_key: str = "action"
+    prompt_source_key: str = "task"
+
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        repack_structure: dict[str, str] = {
+            "observation/image": self.base_image_source_key,
+            "observation/wrist_image": self.left_wrist_image_source_key,
+            "observation/right_wrist_image": self.right_wrist_image_source_key,
+            "observation/state": self.state_source_key,
+            "actions": self.actions_source_key,
+            "prompt": self.prompt_source_key,
+        }
+
+        repack_transform = _transforms.Group(inputs=[_transforms.RepackTransform(repack_structure)])
+
+        data_transforms = _transforms.Group(
+            inputs=[
+                dual_franka_policy.DualFrankaInputs(
+                    model_type=model_config.model_type,
+                    state_key="observation/state",
+                    base_image_key="observation/image",
+                    left_wrist_image_key="observation/wrist_image",
+                    right_wrist_image_key="observation/right_wrist_image",
+                    prompt_key="prompt",
+                )
+            ],
+            outputs=[dual_franka_policy.DualFrankaOutputs(action_dim=self.action_dim)],
+        )
+
+        # No extra delta transform needed since actions are already delta EE
+        if self.extra_delta_transform:
+            # Apply delta conversion on EE dimensions (first 12), keep gripper (last 2) absolute
+            delta_action_mask = _transforms.make_bool_mask(12, -2)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        return dataclasses.replace(
+            self.create_base_config(assets_dirs, model_config),
+            repack_transforms=repack_transform,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=self.action_sequence_keys,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class TrainConfig:
     # Name of the config. Must be unique. Will be used to reference this config.
     name: tyro.conf.Suppress[str]
@@ -1285,6 +1359,42 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         num_train_steps=30_000,
         batch_size=64,
+    ),
+    #
+    # Fine-tuning Dual Franka configs.
+    #
+    TrainConfig(
+        name="pi05_droid_finetune_dual_franka",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # Must match pretrained pi05_droid model state/action dim (padded from 28)
+            action_horizon=20,
+            paligemma_variant="gemma_2b",
+            action_expert_variant="gemma_300m",
+        ),
+        data=LeRobotDualFrankaDataConfig(
+            repo_id="/vepfs-mlp2/c20250510/250303034/workspace/data/dual_franka/pick_up_and_seal_merged",
+            base_config=DataConfig(prompt_from_task=False, action_sequence_keys=("action",)),
+            extra_delta_transform=False,
+            action_dim=14,  # Actual dataset action dimension
+        ),
+        batch_size=64,
+        fsdp_devices=1,
+        num_workers=4,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=2_000,
+            peak_lr=1e-5,
+            decay_steps=50_000,
+            decay_lr=1e-6,
+        ),
+        freeze_filter=pi0_config.Pi0Config(
+            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        ).get_freeze_filter(),
+        ema_decay=None,
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        weight_loader=weight_loaders.CheckpointWeightLoader("/vepfs-mlp2/c20250510/250303034/workspace/model/openpi/openpi-assets/checkpoints/pi05_droid/params"),
+        pytorch_weight_path=None,
+        num_train_steps=100_000,
     ),
     #
     # Debugging configs.
