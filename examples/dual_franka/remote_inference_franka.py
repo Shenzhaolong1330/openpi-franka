@@ -25,11 +25,18 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 import argparse
 import yaml
 import os
+import sys
 import time
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any
 from scipy.spatial.transform import Rotation as R
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+for _path in (_REPO_ROOT / "packages" / "openpi-client" / "src", _REPO_ROOT / "src"):
+    _path_str = str(_path)
+    if _path_str not in sys.path:
+        sys.path.insert(0, _path_str)
 
 from utils import FpsCounter
 from openpi_client import image_tools
@@ -109,7 +116,11 @@ class RemoteInferenceDualFranka:
         # Action mode config - dual franka only supports delta_ee mode
         action_mode = cfg.get("action_mode", {})
         self.action_mode = action_mode.get("mode", "delta_ee")
-        self.ee_action_scale = action_mode.get("ee_action_scale", 1.0)
+        legacy_scale = action_mode.get("ee_action_scale", 1.0)
+        self.ee_pos_action_scale = action_mode.get("ee_pos_action_scale", legacy_scale)
+        self.ee_rot_action_scale = action_mode.get("ee_rot_action_scale", legacy_scale)
+        self.max_pos_delta = action_mode.get("max_pos_delta", None)
+        self.max_rot_delta = action_mode.get("max_rot_delta", None)
 
         # Task config
         task = cfg["task"]
@@ -353,19 +364,6 @@ class RemoteInferenceDualFranka:
             logging.info("[STATE] Block mode not implemented for dual franka delta actions")
             return
 
-        # Get current observation for both arms
-        full_obs = self.robot_client.get_observation()
-        left_arm = full_obs.get('left_arm', {})
-        right_arm = full_obs.get('right_arm', {})
-
-        left_ee_pose = np.array(left_arm.get('ee_pose', [0.0] * 6))
-        right_ee_pose = np.array(right_arm.get('ee_pose', [0.0] * 6))
-
-        left_pos = left_ee_pose[:3].copy()
-        left_rotvec = left_ee_pose[3:6].copy()
-        right_pos = right_ee_pose[:3].copy()
-        right_rotvec = right_ee_pose[3:6].copy()
-
         for i, action in enumerate(actions[:self.action_horizon]):
             start_time = time.perf_counter()
 
@@ -374,44 +372,31 @@ class RemoteInferenceDualFranka:
             left_delta = np.array([
                 action[0], action[2], action[4],   # L_dx, L_dy, L_dz
                 action[6], action[8], action[10],  # L_drx, L_dry, L_drz
-            ]) * self.ee_action_scale
+            ], dtype=np.float32)
             right_delta = np.array([
                 action[1], action[3], action[5],   # R_dx, R_dy, R_dz
                 action[7], action[9], action[11],  # R_drx, R_dry, R_drz
-            ]) * self.ee_action_scale
+            ], dtype=np.float32)
+            left_delta[:3] *= self.ee_pos_action_scale
+            right_delta[:3] *= self.ee_pos_action_scale
+            left_delta[3:] *= self.ee_rot_action_scale
+            right_delta[3:] *= self.ee_rot_action_scale
+            if self.max_pos_delta is not None:
+                left_delta[:3] = np.clip(left_delta[:3], -self.max_pos_delta, self.max_pos_delta)
+                right_delta[:3] = np.clip(right_delta[:3], -self.max_pos_delta, self.max_pos_delta)
+            if self.max_rot_delta is not None:
+                left_delta[3:] = np.clip(left_delta[3:], -self.max_rot_delta, self.max_rot_delta)
+                right_delta[3:] = np.clip(right_delta[3:], -self.max_rot_delta, self.max_rot_delta)
             left_gripper_cmd = action[12]
             right_gripper_cmd = action[13]
 
-            # Apply delta to left arm
-            left_delta_pos = left_delta[:3]
-            left_delta_rotvec = left_delta[3:6]
-            left_target_pos = left_pos + left_delta_pos
-            left_target_rotvec = apply_delta_rotation(left_rotvec, left_delta_rotvec)
-
-            # Apply delta to right arm
-            right_delta_pos = right_delta[:3]
-            right_delta_rotvec = right_delta[3:6]
-            right_target_pos = right_pos + right_delta_pos
-            right_target_rotvec = apply_delta_rotation(right_rotvec, right_delta_rotvec)
-
-            # Send dual arm command
+            # Send delta commands directly; this RPC adapter only supports delta=True.
             self.robot_client.dual_robot_move_to_ee_pose(
-                left_delta=np.concatenate([left_target_pos, left_target_rotvec]),
-                right_delta=np.concatenate([right_target_pos, right_target_rotvec]),
-                delta=False,  # We're sending absolute poses
+                left_delta=left_delta,
+                right_delta=right_delta,
+                delta=True,
                 wait=False,
             )
-
-            # Update current poses
-            full_obs = self.robot_client.get_observation()
-            left_arm = full_obs.get('left_arm', {})
-            right_arm = full_obs.get('right_arm', {})
-            left_ee_pose = np.array(left_arm.get('ee_pose', [0.0] * 6))
-            right_ee_pose = np.array(right_arm.get('ee_pose', [0.0] * 6))
-            left_pos = left_ee_pose[:3].copy()
-            left_rotvec = left_ee_pose[3:6].copy()
-            right_pos = right_ee_pose[:3].copy()
-            right_rotvec = right_ee_pose[3:6].copy()
 
             # Control grippers
             left_gripper_cmd_val = 0.0 if left_gripper_cmd < self.close_threshold else 1.0

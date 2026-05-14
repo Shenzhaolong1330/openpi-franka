@@ -2,16 +2,26 @@ import logging
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 import yaml
 import os
+import sys
 import time
 import threading
 import numpy as np
 from pathlib import Path
 from typing import Dict, Any
 from scipy.spatial.transform import Rotation as R
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+for _path in (_REPO_ROOT / "packages" / "openpi-client" / "src", _REPO_ROOT / "src"):
+    _path_str = str(_path)
+    if _path_str not in sys.path:
+        sys.path.insert(0, _path_str)
+
 from utils import FpsCounter
 from openpi_client import image_tools
 from recorder import Recorder
 from openpi.training import config as _config
+from openpi.training import checkpoints as _checkpoints
+from openpi.shared import normalize as _normalize
 from openpi.policies import policy_config as _policy_config
 from lerobot.cameras.configs import ColorMode, Cv2Rotation
 from lerobot.cameras.realsense.camera_realsense import RealSenseCameraConfig
@@ -105,7 +115,11 @@ class Inference:
         # Action mode config - dual franka only supports delta_ee mode
         action_mode = cfg.get("action_mode", {})
         self.action_mode = action_mode.get("mode", "delta_ee")  # dual franka uses "delta_ee"
-        self.ee_action_scale = action_mode.get("ee_action_scale", 1.0)  # scale factor for delta ee actions
+        legacy_scale = action_mode.get("ee_action_scale", 1.0)
+        self.ee_pos_action_scale = action_mode.get("ee_pos_action_scale", legacy_scale)
+        self.ee_rot_action_scale = action_mode.get("ee_rot_action_scale", legacy_scale)
+        self.max_pos_delta = action_mode.get("max_pos_delta", None)
+        self.max_rot_delta = action_mode.get("max_rot_delta", None)
 
         # Task config
         task = cfg["task"]
@@ -366,65 +380,50 @@ class Inference:
             logging.info("[STATE] Block mode not implemented for dual franka delta actions")
             return
 
-        # Get current observation for both arms
-        full_obs = self.robot_client.get_observation()
-        left_arm = full_obs.get('left_arm', {})
-        right_arm = full_obs.get('right_arm', {})
-
-        left_ee_pose = np.array(left_arm.get('ee_pose', [0.0] * 6))
-        right_ee_pose = np.array(right_arm.get('ee_pose', [0.0] * 6))
-
-        left_pos = left_ee_pose[:3].copy()
-        left_rotvec = left_ee_pose[3:6].copy()
-        right_pos = right_ee_pose[:3].copy()
-        right_rotvec = right_ee_pose[3:6].copy()
-
         for i, action in enumerate(actions[:self.action_horizon]):
             start_time = time.perf_counter()
+
+            # Debug: print raw action values (before scaling)
+            if i == 0:
+                logging.info(f"[DEBUG] Raw action (first in horizon): {action}")
+                logging.info(f"[DEBUG] Action pos range: [{action[:6].min():.4f}, {action[:6].max():.4f}]")
+                logging.info(f"[DEBUG] Action rot range: [{action[6:12].min():.4f}, {action[6:12].max():.4f}]")
 
             # Reorder from interleaved [L_dx, R_dx, L_dy, R_dy, ...] to grouped [L(6), R(6)]
             # Interleaved indices (0-based): L=0,2,4,6,8,10  R=1,3,5,7,9,11
             left_delta = np.array([
                 action[0], action[2], action[4],   # L_dx, L_dy, L_dz
                 action[6], action[8], action[10],  # L_drx, L_dry, L_drz
-            ]) * self.ee_action_scale
+            ], dtype=np.float32)
             right_delta = np.array([
                 action[1], action[3], action[5],   # R_dx, R_dy, R_dz
                 action[7], action[9], action[11],  # R_drx, R_dry, R_drz
-            ]) * self.ee_action_scale
+            ], dtype=np.float32)
+            left_delta[:3] *= self.ee_pos_action_scale
+            right_delta[:3] *= self.ee_pos_action_scale
+            left_delta[3:] *= self.ee_rot_action_scale
+            right_delta[3:] *= self.ee_rot_action_scale
+            if self.max_pos_delta is not None:
+                left_delta[:3] = np.clip(left_delta[:3], -self.max_pos_delta, self.max_pos_delta)
+                right_delta[:3] = np.clip(right_delta[:3], -self.max_pos_delta, self.max_pos_delta)
+            if self.max_rot_delta is not None:
+                left_delta[3:] = np.clip(left_delta[3:], -self.max_rot_delta, self.max_rot_delta)
+                right_delta[3:] = np.clip(right_delta[3:], -self.max_rot_delta, self.max_rot_delta)
             left_gripper_cmd = action[12]
             right_gripper_cmd = action[13]
 
-            # Apply delta to left arm
-            left_delta_pos = left_delta[:3]
-            left_delta_rotvec = left_delta[3:6]
-            left_target_pos = left_pos + left_delta_pos
-            left_target_rotvec = apply_delta_rotation(left_rotvec, left_delta_rotvec)
+            # Debug: print scaled delta values
+            if i == 0:
+                logging.info(f"[DEBUG] Left delta (scaled): pos={left_delta[:3]}, rot={left_delta[3:]}")
+                logging.info(f"[DEBUG] Right delta (scaled): pos={right_delta[:3]}, rot={right_delta[3:]}")
 
-            # Apply delta to right arm
-            right_delta_pos = right_delta[:3]
-            right_delta_rotvec = right_delta[3:6]
-            right_target_pos = right_pos + right_delta_pos
-            right_target_rotvec = apply_delta_rotation(right_rotvec, right_delta_rotvec)
-
-            # Send dual arm command
+            # Send delta commands directly (RPC server only supports delta=True)
             self.robot_client.dual_robot_move_to_ee_pose(
-                left_delta=np.concatenate([left_target_pos, left_target_rotvec]),
-                right_delta=np.concatenate([right_target_pos, right_target_rotvec]),
-                delta=False,  # We're sending absolute poses
+                left_delta=left_delta,
+                right_delta=right_delta,
+                delta=True,  # Send as delta increments
                 wait=False,
             )
-
-            # Update current poses
-            full_obs = self.robot_client.get_observation()
-            left_arm = full_obs.get('left_arm', {})
-            right_arm = full_obs.get('right_arm', {})
-            left_ee_pose = np.array(left_arm.get('ee_pose', [0.0] * 6))
-            right_ee_pose = np.array(right_arm.get('ee_pose', [0.0] * 6))
-            left_pos = left_ee_pose[:3].copy()
-            left_rotvec = left_ee_pose[3:6].copy()
-            right_pos = right_ee_pose[:3].copy()
-            right_rotvec = right_ee_pose[3:6].copy()
 
             # Control grippers
             left_gripper_cmd_val = 0.0 if left_gripper_cmd < self.close_threshold else 1.0
@@ -459,7 +458,26 @@ class Inference:
 
         obs = self.get_obs_state()
         logging.info(f"[STATE] Observation state keys: {obs.keys()}")
-        policy = _policy_config.create_trained_policy(self.model_config, self.checkpoint_dir)
+        logging.info(f"[DEBUG] Observation state shape: {obs['observation/state'].shape}")
+        logging.info(f"[DEBUG] Observation state values: {obs['observation/state']}")
+        
+        # Load norm_stats directly from checkpoint assets directory
+        # The norm_stats.json is in: checkpoint_dir/assets/norm_stats.json
+        norm_stats_path = self.checkpoint_dir / "assets"
+        norm_stats = _normalize.load(norm_stats_path)
+        logging.info(f"Loaded norm stats from {norm_stats_path}")
+        
+        # Debug: print norm stats
+        logging.info(f"[DEBUG] State norm - mean: {norm_stats['state'].mean}")
+        logging.info(f"[DEBUG] State norm - std: {norm_stats['state'].std}")
+        logging.info(f"[DEBUG] Actions norm - mean: {norm_stats['actions'].mean}")
+        logging.info(f"[DEBUG] Actions norm - std: {norm_stats['actions'].std}")
+        
+        policy = _policy_config.create_trained_policy(
+            self.model_config, 
+            self.checkpoint_dir,
+            norm_stats=norm_stats
+        )
         logging.info("Warming up the model")
         start = time.time()
         policy.infer(obs)
@@ -471,6 +489,15 @@ class Inference:
                 start_time = time.perf_counter()
                 obs = self.get_obs_state()
                 result = policy.infer(obs)
+                actions = result["actions"]
+                
+                # Debug: check if actions are normalized or unnormalized
+                if infer_time == 1:
+                    logging.info(f"[DEBUG] Raw model output (should be unnormalized): {actions[0]}")
+                    # Check action statistics
+                    logging.info(f"[DEBUG] Actions mean per dim: {actions.mean(axis=0)}")
+                    logging.info(f"[DEBUG] Actions std per dim: {actions.std(axis=0)}")
+                
                 self.execute_actions(result["actions"])
                 self.recorder.submit_actions(result["actions"][:self.action_horizon], infer_time, obs["prompt"])
                 self.recorder.submit_obs(obs)

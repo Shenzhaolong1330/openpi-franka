@@ -1315,9 +1315,9 @@ _CONFIGS = [
         #     decay_steps=1_000_000,
         #     decay_lr=5e-5,
         # ),
-        freeze_filter=pi0_config.Pi0Config(
-            paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
-        ).get_freeze_filter(),
+        # freeze_filter=pi0_config.Pi0Config(
+        #     paligemma_variant="gemma_2b_lora", action_expert_variant="gemma_300m_lora"
+        # ).get_freeze_filter(),
         # Turn off EMA for LoRA finetuning.
         ema_decay=None,
         optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),

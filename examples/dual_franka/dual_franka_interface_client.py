@@ -231,14 +231,14 @@ class DualFrankaRobotiqRpcClient:
         action = {
             'left_arm': {
                 'motion': {
-                    'translation': list(left_delta[:3]),
-                    'rotation_rotvec': list(left_delta[3:]),
+                    'translation': [float(v) for v in left_delta[:3]],
+                    'rotation_rotvec': [float(v) for v in left_delta[3:]],
                 }
             },
             'right_arm': {
                 'motion': {
-                    'translation': list(right_delta[:3]),
-                    'rotation_rotvec': list(right_delta[3:]),
+                    'translation': [float(v) for v in right_delta[:3]],
+                    'rotation_rotvec': [float(v) for v in right_delta[3:]],
                 }
             },
         }

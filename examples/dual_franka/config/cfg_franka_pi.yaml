@@ -1,10 +1,11 @@
 model:
   name: pi05_droid_finetune_dual_franka
-  checkpoint_dir: /vepfs-mlp2/c20250510/250303034/workspace/openpi-franka/checkpoints/pi05_droid_finetune_dual_franka/my_experiment/20000
+  checkpoint_dir: /home/deepcybo/.cache/openpi/openpi-assets/checkpoints/pi05_droid_finetune_dual_franka/pi4dualfranka/45000
+
 cameras:
-  left_wrist_cam_serial: "344322074412"  # Update with your left wrist camera serial
-  right_wrist_cam_serial: "243222071212"  # Update with your right wrist camera serial
-  exterior_cam_serial: "243322071821"     # Update with your head/exterior camera serial
+  left_wrist_cam_serial: "347622074336"  # Update with your left wrist camera serial
+  right_wrist_cam_serial: "337322072568"  # Update with your right wrist camera serial
+  exterior_cam_serial: "348522072761"     # Update with your head/exterior camera serial
   fps: 30
 
 video:
@@ -12,12 +13,12 @@ video:
   visualize: true
 
 robot:
-  ip: 192.168.110.15
+  ip: 172.16.0.1
   port: 4242
   # Initial poses for both arms (7 joint positions each)
   left_initial_pose: [0.00761213, -0.39547789, -0.03788094, -2.44777918, 0.09107678, 1.99305379, -1.65751863]
   right_initial_pose: [-0.00761213, -0.39547789, 0.03788094, -2.44777918, -0.09107678, 1.99305379, 1.65751863]
-  action_fps: 20
+  action_fps: 30
   action_horizon: 10
 
 gripper:
@@ -34,7 +35,10 @@ gripper:
 # - 1D right gripper command
 action_mode:
   mode: delta_ee
-  ee_action_scale: 1.0  # scale factor for delta ee actions
+  ee_pos_action_scale: 10.0  # model translation outputs are usually 0.000-0.002m
+  ee_rot_action_scale: 5.0   # keep rotation scaling lower than translation
+  max_pos_delta: 0.03        # meters per control step, safety clip
+  max_rot_delta: 0.12        # radians per control step, safety clip
 
 task:
   description: Pick up all the objects into the basket and seal the basket.
